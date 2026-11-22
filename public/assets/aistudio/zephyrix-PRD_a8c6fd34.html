@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Zephyrix — Product Requirements Document (PRD)</title>
+<style>
+  :root {
+    --bg: #0b0f1a; --panel: rgba(255,255,255,0.05); --panel-2: rgba(255,255,255,0.08);
+    --text: #e9edf7; --muted: #9aa5bd; --line: rgba(255,255,255,0.10);
+    --a1: #7c5cff; --a2: #22d3ee; --a3: #f472b6; --ok: #34d399;
+    --shadow: 0 24px 60px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.08);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: "Noto Sans Bengali", "Hind Siliguri", "Segoe UI", system-ui, sans-serif;
+    color: var(--text); line-height: 1.75; font-size: 16px;
+    background:
+      radial-gradient(1200px 600px at 10% -10%, rgba(124,92,255,0.35), transparent 60%),
+      radial-gradient(900px 500px at 110% 10%, rgba(34,211,238,0.22), transparent 60%),
+      radial-gradient(800px 600px at 50% 120%, rgba(244,114,182,0.18), transparent 60%),
+      var(--bg);
+    min-height: 100vh;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 48px 24px 80px; }
+
+  /* HERO */
+  .hero {
+    position: relative; border-radius: 28px; padding: 56px 48px; overflow: hidden;
+    background: linear-gradient(135deg, rgba(124,92,255,0.25), rgba(34,211,238,0.10) 60%, rgba(244,114,182,0.15));
+    border: 1px solid var(--line); box-shadow: var(--shadow); transform-style: preserve-3d;
+  }
+  .hero::after {
+    content: ""; position: absolute; width: 380px; height: 380px; right: -120px; top: -120px;
+    background: radial-gradient(circle, rgba(34,211,238,0.5), transparent 65%); filter: blur(10px);
+  }
+  .badge {
+    display: inline-block; padding: 6px 14px; border-radius: 999px; font-size: 13px;
+    background: rgba(255,255,255,0.08); border: 1px solid var(--line); color: var(--muted);
+  }
+  .hero h1 {
+    font-size: 56px; margin: 18px 0 6px; letter-spacing: -1px; line-height: 1.1;
+    background: linear-gradient(120deg, #fff 0%, #c7d2fe 40%, #67e8f9 100%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .hero .sub { font-size: 20px; color: var(--muted); max-width: 680px; }
+  .meta { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 26px; }
+  .meta span {
+    padding: 8px 14px; border-radius: 12px; background: var(--panel-2); border: 1px solid var(--line); font-size: 14px;
+  }
+
+  /* SECTIONS */
+  section {
+    margin-top: 28px; padding: 32px 36px; border-radius: 22px;
+    background: var(--panel); border: 1px solid var(--line); box-shadow: var(--shadow);
+    backdrop-filter: blur(6px);
+  }
+  h2 {
+    font-size: 26px; margin: 0 0 14px; display: flex; align-items: center; gap: 12px;
+  }
+  h2 .num {
+    display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px;
+    border-radius: 12px; font-size: 16px; font-weight: 700; color: #0b0f1a;
+    background: linear-gradient(135deg, var(--a2), var(--a1)); box-shadow: 0 8px 20px rgba(124,92,255,0.35);
+  }
+  h3 { font-size: 19px; margin: 22px 0 8px; color: #c7d2fe; }
+  p { margin: 8px 0; color: #d6dcea; }
+  ul { padding-left: 22px; margin: 8px 0; }
+  li { margin: 4px 0; color: #d6dcea; }
+  strong { color: #fff; }
+  code {
+    font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 14px;
+    background: rgba(255,255,255,0.08); padding: 2px 8px; border-radius: 6px; color: #a5f3fc;
+  }
+
+  /* TABLES */
+  .table-wrap { overflow-x: auto; border-radius: 14px; border: 1px solid var(--line); margin-top: 12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 15px; }
+  th, td { padding: 12px 14px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { background: rgba(124,92,255,0.18); color: #fff; font-weight: 600; }
+  tr:last-child td { border-bottom: none; }
+  .pill {
+    display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600;
+  }
+  .p0 { background: rgba(244,114,182,0.2); color: #fbcfe8; }
+  .p1 { background: rgba(34,211,238,0.2); color: #a5f3fc; }
+  .p2 { background: rgba(52,211,153,0.2); color: #a7f3d0; }
+
+  /* CARDS GRID */
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-top: 14px; }
+  .card {
+    padding: 20px; border-radius: 18px; background: var(--panel-2); border: 1px solid var(--line);
+    box-shadow: 0 12px 30px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.1);
+    transition: transform .25s ease, box-shadow .25s ease;
+  }
+  .card:hover { transform: translateY(-4px) perspective(600px) rotateX(2deg); box-shadow: 0 22px 44px rgba(0,0,0,0.45); }
+  .card .ico { font-size: 28px; margin-bottom: 8px; }
+  .card h4 { margin: 0 0 6px; font-size: 17px; color: #fff; }
+  .card p { font-size: 14px; margin: 0; color: var(--muted); }
+
+  /* FLOW */
+  .flow { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 12px; }
+  .step {
+    padding: 12px 16px; border-radius: 14px; background: linear-gradient(135deg, rgba(124,92,255,0.25), rgba(34,211,238,0.15));
+    border: 1px solid var(--line); font-size: 14px; color: #fff; box-shadow: 0 10px 22px rgba(0,0,0,0.3);
+  }
+  .arrow { color: var(--a2); font-size: 20px; }
+
+  .callout {
+    margin-top: 16px; padding: 16px 20px; border-radius: 16px; border-left: 4px solid var(--a3);
+    background: rgba(244,114,182,0.08); color: #fbcfe8; font-size: 15px;
+  }
+  .ok { border-left-color: var(--ok); background: rgba(52,211,153,0.08); color: #a7f3d0; }
+
+  footer { margin-top: 40px; text-align: center; color: var(--muted); font-size: 14px; }
+
+  @media (max-width: 640px) {
+    .wrap { padding: 20px 14px 60px; }
+    .hero { padding: 36px 24px; }
+    .hero h1 { font-size: 38px; }
+    section { padding: 24px 20px; }
+  }
+
+  @media print {
+    body { background: #0b0f1a !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .card, tr { break-inside: avoid; }
+    .card:hover { transform: none; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="hero">
+    <span class="badge">Product Requirements Document · সংস্করণ ১.০</span>
+    <h1>Zephyrix</h1>
+    <div class="sub">একটি আধুনিক, দ্রুত ও নিরাপদ মেসেজিং ওয়েব অ্যাপ, যেখানে ইউজার নিজেই বট তৈরি করতে পারে এবং Zephyrix Forge থেকে বট API পায়।</div>
+    <div class="meta">
+      <span>ডকুমেন্ট তারিখ: ২২ নভেম্বর ২০২৬</span>
+      <span>প্ল্যাটফর্ম: ওয়েব (PWA) · ডেস্কটপ ও মোবাইল</span>
+      <span>স্ট্যাটাস: ড্রাফট</span>
+    </div>
+  </div>
+
+  <section>
+    <h2><span class="num">১</span>প্রোডাক্ট ভিশন ও লক্ষ্য</h2>
+    <p>Zephyrix এর লক্ষ্য হলো টেলিগ্রামের মূল অভিজ্ঞতা, অর্থাৎ দ্রুত মেসেজিং, গ্রুপ, চ্যানেল ও বট, একটি নিজস্ব ও সুন্দর ডিজাইনে দেওয়া। সব ফিচার নকল করা উদ্দেশ্য নয়। যা জরুরি তাই রাখা হবে, আর ডিজাইনে অ্যাপটিকে আলাদা পরিচয় দেওয়া হবে।</p>
+    <h3>সফলতার মাপকাঠি</h3>
+    <ul>
+      <li>মেসেজ পাঠানো থেকে প্রাপকের স্ক্রিনে পৌঁছানো গড়ে ৩০০ মিলিসেকেন্ডের মধ্যে</li>
+      <li>প্রথম লগইন থেকে প্রথম মেসেজ পর্যন্ত ৯০ সেকেন্ডের মধ্যে সম্পন্ন</li>
+      <li>Lighthouse পারফরম্যান্স স্কোর ৯০+ (মোবাইল)</li>
+      <li>প্রথম ৩ মাসে ১০,০০০ সক্রিয় ইউজার এবং ৫০০+ ডেভেলপার বট তৈরি</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2><span class="num">২</span>স্কোপ</h2>
+    <h3>এই সংস্করণে থাকছে</h3>
+    <ul>
+      <li>টেক্সট, ছবি, ভিডিও, ভয়েস মেসেজ, ভিডিও নোট এবং যেকোনো ফাইল অ্যাটাচমেন্ট</li>
+      <li>ব্যক্তিগত চ্যাট, গ্রুপ, চ্যানেল (ব্রডকাস্ট) ও ইনভাইট লিংক</li>
+      <li>রিয়েল-টাইম ডেলিভারি, মেসেজ স্ট্যাটাস, টাইপিং ও অনলাইন স্ট্যাটাস</li>
+      <li>এডিট, ডিলিট (নিজের জন্য/সবার জন্য), রিপ্লাই, ফরওয়ার্ড, কোট, পিন, মাল্টি-সিলেক্ট</li>
+      <li>ইমোজি রিঅ্যাকশন, মেনশন, হ্যাশট্যাগ এবং চ্যাটের ভিতরে ও গ্লোবাল সার্চ</li>
+      <li>Google সাইন-ইন এবং নিজস্ব ইমেইল OTP লগইন</li>
+      <li>বট প্ল্যাটফর্ম: Zephyrix Forge থেকে ইউজার নিজের বট তৈরি করবে এবং বট API টোকেন পাবে</li>
+      <li>ডার্ক ও লাইট থিম, 3D ও 4D-লেভেল UI (বিস্তারিত সেকশন ৭)</li>
+    </ul>
+    <h3>এই সংস্করণে থাকছে না</h3>
+    <ul>
+      <li>ভয়েস ও ভিডিও কল</li>
+      <li>স্টিকার, GIF ও কাস্টম স্টিকার প্যাক</li>
+      <li>অ্যাডমিন প্যানেল, রিপোর্ট সিস্টেম ও মডারেশন কিউ (পরবর্তী সংস্করণে)</li>
+      <li>QR কোড দিয়ে ডিভাইস লিংক ও লগইন (পরবর্তী সংস্করণে)</li>
+      <li>এন্ড-টু-এন্ড এনক্রিপশন (পরিকল্পনায় আছে, প্রথম সংস্করণে সার্ভার-সাইড এনক্রিপশন)</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2><span class="num">৩</span>ইউজার টাইপ</h2>
+    <div class="grid">
+      <div class="card"><div class="ico">👤</div><h4>সাধারণ ইউজার</h4><p>চ্যাট করে, গ্রুপে যোগ দেয়, ফাইল পাঠায়, বট ব্যবহার করে।</p></div>
+      <div class="card"><div class="ico">🛠️</div><h4>বট ডেভেলপার</h4><p>Zephyrix Forge থেকে বট তৈরি করে, টোকেন নেয়, API ব্যবহার করে।</p></div>
+      <div class="card"><div class="ico">📣</div><h4>চ্যানেল মালিক</h4><p>একমুখী ঘোষণা চ্যানেল চালায়, সদস্য ব্যবস্থাপনা করে।</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">৪</span>ফিচার রিকোয়ারমেন্ট</h2>
+    <p>প্রায়োরিটি: P0 = প্রথম রিলিজে বাধ্যতামূলক, P1 = প্রথম রিলিজের পর দ্রুত, P2 = ভবিষ্যৎ।</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>এলাকা</th><th>ফিচার</th><th>প্রায়োরিটি</th></tr></thead>
+        <tbody>
+          <tr><td>মেসেজিং</td><td>টেক্সট, ছবি, ভিডিও, ফাইল, ভয়েস মেসেজ, ভিডিও নোট</td><td><span class="pill p0">P0</span></td></tr>
+          <tr><td>মেসেজিং</td><td>শিডিউল ও নীরব মেসেজ, লিংক প্রিভিউ, কোড ব্লক, মার্কডাউন</td><td><span class="pill p1">P1</span></td></tr>
+          <tr><td>রিয়েল-টাইম</td><td>WebSocket ডেলিভারি, পাঠানো/পৌঁছানো/পড়া স্ট্যাটাস, টাইপিং</td><td><span class="pill p0">P0</span></td></tr>
+          <tr><td>রিয়েল-টাইম</td><td>অফলাইন কিউ, স্বয়ংক্রিয় পুনঃসংযোগ, হিস্ট্রি সিঙ্ক</td><td><span class="pill p0">P0</span></td></tr>
+          <tr><td>এডিট/ডিলিট</td><td>এডিট (এডিটেড মার্কসহ), ডিলিট (আমার জন্য/সবার জন্য), রিপ্লাই, ফরওয়ার্ড, পিন</td><td><span class="pill p0">P0</span></td></tr>
+          <tr><td>এডিট/ডিলিট</td><td>কোট, মাল্টি-সিলেক্ট, সেভড মেসেজ</td><td><span class="pill p1">P1</span></td></tr>
+          <tr><td>রিঅ্যাকশন</td><td>ইমোজি রিঅ্যাকশন, ইমোজি পিকার, মেনশন</td><td><span class="pill p0">P0</span></td></tr>
+          <tr><td>সার্চ</td><td>চ্যাটের ভিতরে সার্চ, গ্লোবাল সার্চ, তারিখ/মিডিয়া ফিল্টার</td><td><span class="pill p0">P0</span></td></tr>
+          <tr><td>চ্যাট/গ্রুপ</td><td>ব্যক্তিগত চ্যাট, গ্রুপ, রোল (অ্যাডমিন/সদস্য), ইনভাইট লিংক</td><td><span class="pill p0">P0</span></td></tr>
+          <tr><td>চ্যাট/গ্রুপ</td><td>চ্যানেল (ব্রডকাস্ট), আর্কাইভ, মিউট, চ্যাট পিন, ড্রাফট, ব্লক</td><td><span class="pill p1">P1</span></td></tr>
+          <tr><td>মিডিয়া</td><td>ফুলস্ক্রিন ভিউয়ার, ইনলাইন প্লেয়ার, ছবি কম্প্রেস, থাম্বনেইল, আপলোড পুনরায় শুরু</td><td><span class="pill p0">P0</span></td></tr>
+          <tr><td>লগইন</td><td>Google সাইন-ইন, ইমেইল OTP, ইউজারনেম, প্রোফাইল</td><td><span class="pill p0">P0</span></td></tr>
+          <tr><td>নিরাপত্তা</td><td>সেশন তালিকা, রিমোট লগআউট, TLS, ফাইল টাইপ যাচাই, ম্যালওয়্যার স্ক্যান</td><td><span class="pill p0">P0</span></td></tr>
+          <tr><td>বট</td><td>Zephyrix Forge, বট তৈরি, টোকেন, বট API, ওয়েবহুক</td><td><span class="pill p0">P0</span></td></tr>
+          <tr><td>নোটিফিকেশন</td><td>ব্রাউজার পুশ, আনরিড ব্যাজ, নোটিফিকেশন সেটিংস</td><td><span class="pill p1">P1</span></td></tr>
+          <tr><td>UI</td><td>দুই-প্যানেল (ডেস্কটপ), মোবাইল স্ক্রিন, মেসেজ বাবল, 3D/4D মোশন</td><td><span class="pill p0">P0</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">৫</span>অথেনটিকেশন ফ্লো</h2>
+    <h3>ইমেইল OTP (নিজস্ব PSP সার্ভার)</h3>
+    <div class="flow">
+      <div class="step">ইমেইল লিখুন</div><span class="arrow">→</span>
+      <div class="step">রেট লিমিট যাচাই</div><span class="arrow">→</span>
+      <div class="step">৬ সংখ্যার OTP তৈরি ও হ্যাশ</div><span class="arrow">→</span>
+      <div class="step">SMTP-তে ইমেইল পাঠানো</div><span class="arrow">→</span>
+      <div class="step">৫ মিনিটের মধ্যে যাচাই</div>
+    </div>
+    <ul>
+      <li>OTP শুধু হ্যাশ আকারে ডাটাবেসে থাকবে, একবার ব্যবহারযোগ্য এবং ৫ মিনিটে মেয়াদোত্তীর্ণ</li>
+      <li>একই ইমেইলে প্রতি মিনিটে সীমিত অনুরোধ, ভুল চেষ্টার পর অস্থায়ী লক</li>
+      <li>SPF, DKIM ও DMARC সেট করা বাধ্যতামূলক, নইলে ইমেইল স্প্যামে যাবে</li>
+    </ul>
+    <h3>Google সাইন-ইন</h3>
+    <p>OAuth 2.0 / OpenID Connect ব্যবহার করে ID token যাচাই করা হবে। প্রথমবার লগইনে ইউজারনেম বেছে নিতে বলা হবে।</p>
+    <div class="callout ok">ফোন নম্বর ব্যবহার করা হবে না। ইউজারের পরিচয় হবে ইউজারনেম, ইমেইল ও প্রোফাইলের মাধ্যমে।</div>
+  </section>
+
+  <section>
+    <h2><span class="num">৬</span>বট সিস্টেম: Zephyrix Forge</h2>
+    <p>বট তৈরির প্ল্যাটফর্মের নাম <strong>Zephyrix Forge</strong>। এটি Zephyrix-এর মূল বট, যেখান থেকে ইউজার নিজের বট তৈরি করে।</p>
+    <div class="flow">
+      <div class="step">Forge খুলুন</div><span class="arrow">→</span>
+      <div class="step">বটের নাম ও ইউজারনেম দিন</div><span class="arrow">→</span>
+      <div class="step">বট টোকেন পান</div><span class="arrow">→</span>
+      <div class="step">বট API ব্যবহার করুন</div>
+    </div>
+    <ul>
+      <li>বট ইউজারনেম অবশ্যই <code>bot</code> দিয়ে শেষ হবে, এবং অনন্য হবে</li>
+      <li>বট API: <code>sendMessage</code>, <code>sendPhoto</code>, <code>sendDocument</code>, <code>getUpdates</code> এবং ওয়েবহুক</li>
+      <li>টোকেন একবার দেখানো হবে, পরে শুধু রিজেনারেট করা যাবে</li>
+      <li>ডেভেলপার ব্যাজ স্বয়ংক্রিয়ভাবে বটের মালিককে দেওয়া হবে</li>
+      <li>বট রেট লিমিট ও স্প্যাম সুরক্ষা থাকবে, অতিরিক্ত অনুরোধ সীমিত হবে</li>
+    </ul>
+    <div class="callout">অ্যাডমিন ও রিপোর্ট সিস্টেম এই সংস্করণে বাদ। তবে বট প্ল্যাটফর্ম ও ইউজার ডেটা মডেল এমনভাবে ডিজাইন হবে, যাতে পরে অ্যাডমিন রোল যুক্ত করা সহজ হয়।</div>
+  </section>
+
+  <section>
+    <h2><span class="num">৭</span>ডিজাইন সিস্টেম (3D ও 4D)</h2>
+    <p>ডিজাইনের লক্ষ্য হলো টেলিগ্রামের চেয়েও আধুনিক ও আকর্ষণীয় অভিজ্ঞতা, তবে পড়ার সুবিধা ও পারফরম্যান্স বজায় রেখে।</p>
+    <div class="grid">
+      <div class="card"><div class="ico">🧊</div><h4>3D গভীরতা</h4><p>স্তরযুক্ত কার্ড, নরম ছায়া, গ্লাস প্যানেল এবং উঁচু-নিচু বাটন।</p></div>
+      <div class="card"><div class="ico">🌌</div><h4>4D গতি</h4><p>সময়ভিত্তিক মোশন: মেসেজ আসার অ্যানিমেশন, হোভারে ঝোঁক, স্ক্রলে প্যারালাক্স।</p></div>
+      <div class="card"><div class="ico">🔮</div><h4>QR ও বট ভিজ্যুয়াল</h4><p>বট কার্ড ও ভবিষ্যৎ QR ভিউ হাই-লেভেল 3D স্টাইলে।</p></div>
+      <div class="card"><div class="ico">🎨</div><h4>থিম</h4><p>ডার্ক ও লাইট থিম, সিস্টেম অনুযায়ী স্বয়ংক্রিয় পরিবর্তন।</p></div>
+    </div>
+    <h3>মোশন নীতিমালা</h3>
+    <ul>
+      <li>অ্যানিমেশন ২০০–৪০০ মিলিসেকেন্ডের মধ্যে থাকবে</li>
+      <li>ইউজার "কম গতি" সেটিংস চালু করলে সব অ্যানিমেশন বন্ধ হবে (<code>prefers-reduced-motion</code>)</li>
+      <li>GPU-বান্ধব transform ও opacity ব্যবহার, layout বদলানো অ্যানিমেশন নয়</li>
+    </ul>
+    <h3>অ্যাক্সেসিবিলিটি</h3>
+    <p>টেক্সট ও ব্যাকগ্রাউন্ডের কনট্রাস্ট WCAG AA মানের হবে। ফন্ট সাইজ নিয়ন্ত্রণ থাকবে এবং কীবোর্ড দিয়ে সব কাজ করা যাবে।</p>
+  </section>
+
+  <section>
+    <h2><span class="num">৮</span>মূল ইউজার ফ্লো</h2>
+    <h3>নতুন ইউজারের প্রথম অভিজ্ঞতা</h3>
+    <div class="flow">
+      <div class="step">সাইন-ইন (Google/OTP)</div><span class="arrow">→</span>
+      <div class="step">ইউজারনেম</div><span class="arrow">→</span>
+      <div class="step">প্রোফাইল ছবি (ঐচ্ছিক)</div><span class="arrow">→</span>
+      <div class="step">প্রথম চ্যাট</div>
+    </div>
+    <h3>মেসেজ পাঠানো</h3>
+    <div class="flow">
+      <div class="step">টাইপ/ফাইল যোগ</div><span class="arrow">→</span>
+      <div class="step">অপটিমিস্টিক UI (ঘড়ি আইকন)</div><span class="arrow">→</span>
+      <div class="step">সার্ভার নিশ্চিত (✓)</div><span class="arrow">→</span>
+      <div class="step">পৌঁছানো (✓✓)</div><span class="arrow">→</span>
+      <div class="step">পড়া (নীল ✓✓)</div>
+    </div>
+    <h3>বট তৈরির ফ্লো</h3>
+    <div class="flow">
+      <div class="step">Zephyrix Forge চ্যাট</div><span class="arrow">→</span>
+      <div class="step">/newbot কমান্ড</div><span class="arrow">→</span>
+      <div class="step">নাম ও ইউজারনেম</div><span class="arrow">→</span>
+      <div class="step">টোকেন প্রদান</div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">৯</span>ডেটা মডেল (উচ্চ-স্তর)</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>এন্টিটি</th><th>মূল ফিল্ড</th></tr></thead>
+        <tbody>
+          <tr><td><code>users</code></td><td>id, username (অনন্য), display_name, email, avatar_url, verified_flag, created_at</td></tr>
+          <tr><td><code>sessions</code></td><td>id, user_id, device_name, ip_hash, last_seen, revoked_at</td></tr>
+          <tr><td><code>chats</code></td><td>id, type (direct / group / channel), title, created_by, created_at</td></tr>
+          <tr><td><code>chat_members</code></td><td>chat_id, user_id, role (owner / admin / member), muted_until, joined_at</td></tr>
+          <tr><td><code>messages</code></td><td>id, chat_id, sender_id, reply_to_id, forwarded_from, body, edited_at, deleted_at, created_at</td></tr>
+          <tr><td><code>attachments</code></td><td>id, message_id, storage_key, mime_type, size, checksum, scan_status</td></tr>
+          <tr><td><code>reactions</code></td><td>message_id, user_id, emoji, created_at</td></tr>
+          <tr><td><code>message_receipts</code></td><td>message_id, user_id, delivered_at, read_at</td></tr>
+          <tr><td><code>bots</code></td><td>id, owner_id, username, token_hash, webhook_url, created_at, revoked_at</td></tr>
+          <tr><td><code>otp_codes</code></td><td>email, code_hash, attempts, expires_at, used_at</td></tr>
+          <tr><td><code>audit_logs</code></td><td>id, actor_id, action, target, metadata, created_at (প্রস্তুতি রাখা)</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout ok">মেসেজ ও চ্যাট মুছে ফেলা হবে soft-delete দিয়ে (<code>deleted_at</code>), যাতে ভুল মুছলে ফেরত আনা যায়।</div>
+  </section>
+
+  <section>
+    <h2><span class="num">১০</span>API ও রিয়েল-টাইম</h2>
+    <ul>
+      <li>REST API: <code>/auth/*</code>, <code>/users/*</code>, <code>/chats/*</code>, <code>/messages/*</code>, <code>/media/*</code>, <code>/bots/*</code></li>
+      <li>রিয়েল-টাইম: Socket.IO বা WebSocket চ্যানেলে <code>message:new</code>, <code>message:edit</code>, <code>message:delete</code>, <code>typing</code>, <code>receipt:update</code>, <code>presence</code> ইভেন্ট</li>
+      <li>মিডিয়া আপলোড: presigned URL দিয়ে সরাসরি S3-কম্প্যাটিবল স্টোরেজে, তারপর সার্ভারে চেকসাম ও স্ক্যান যাচাই</li>
+      <li>ক্লায়েন্ট-জেনারেটেড <code>client_id</code> দিয়ে ডুপ্লিকেট মেসেজ প্রতিরোধ (idempotency)</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2><span class="num">১১</span>নন-ফাংশনাল রিকোয়ারমেন্ট</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>বিষয়</th><th>লক্ষ্যমাত্রা</th></tr></thead>
+        <tbody>
+          <tr><td>মেসেজ ডেলিভারি লেটেন্সি</td><td>গড়ে ৩০০ms, ৯৫তম পার্সেন্টাইল ১ সেকেন্ডের নিচে</td></tr>
+          <tr><td>একসাথে কানেকশন</td><td>প্রথম সংস্করণে ১০,০০০ সমবর্তী WebSocket</td></tr>
+          <tr><td>আপটাইম</td><td>৯৯.৫%</td></tr>
+          <tr><td>প্রথম লোড (মোবাইল, ৪G)</td><td>৩ সেকেন্ডের কম</td></tr>
+          <tr><td>ফাইল আপলোড সীমা</td><td>ছবি ২০ MB, ভিডিও ২ GB, অন্য ফাইল ২ GB (পরে সমন্বয়যোগ্য)</td></tr>
+          <tr><td>ডেটা সুরক্ষা</td><td>TLS 1.3, পাসওয়ার্ডবিহীন OTP হ্যাশ, ডাটাবেসে এনক্রিপশন</td></tr>
+          <tr><td>ব্যাকআপ</td><td>দৈনিক ডাটাবেস ব্যাকআপ, ৩০ দিন সংরক্ষণ</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">১২</span>টেক স্ট্যাক (প্রস্তাবিত)</h2>
+    <div class="grid">
+      <div class="card"><h4>ফ্রন্টএন্ড</h4><p>React + TypeScript, PWA, Socket.IO client, CSS দিয়ে 3D/4D মোশন</p></div>
+      <div class="card"><h4>ব্যাকএন্ড</h4><p>Node.js (Fastify) বা FastAPI, Socket.IO</p></div>
+      <div class="card"><h4>ডেটা</h4><p>PostgreSQL, Redis (প্রেজেন্স, OTP রেট লিমিট), S3-কম্প্যাটিবল স্টোরেজ</p></div>
+      <div class="card"><h4>ইমেইল</h4><p>নিজস্ব SMTP বা ট্রানজ্যাকশনাল সার্ভিস, SPF/DKIM/DMARC সহ</p></div>
+      <div class="card"><h4>ইনফ্রা</h4><p>Docker, CI/CD, CDN, মনিটরিং ও লগিং</p></div>
+      <div class="card"><h4>টেস্টিং</h4><p>ইউনিট, E2E (Playwright), লোড টেস্ট (k6)</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">১৩</span>মাইলস্টোন</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>ধাপ</th><th>সময়কাল</th><th>ফলাফল</th></tr></thead>
+        <tbody>
+          <tr><td>ফেজ ১: ফাউন্ডেশন</td><td>৩ সপ্তাহ</td><td>অথ, ইউজার, প্রোফাইল, ডেটাবেস, ডিজাইন সিস্টেম</td></tr>
+          <tr><td>ফেজ ২: কোর মেসেজিং</td><td>৪ সপ্তাহ</td><td>চ্যাট, রিয়েল-টাইম, মিডিয়া, স্ট্যাটাস</td></tr>
+          <tr><td>ফেজ ৩: মেসেজ অ্যাকশন ও সার্চ</td><td>৩ সপ্তাহ</td><td>এডিট, ডিলিট, রিপ্লাই, ফরওয়ার্ড, রিঅ্যাকশন, সার্চ</td></tr>
+          <tr><td>ফেজ ৪: গ্রুপ ও চ্যানেল</td><td>৩ সপ্তাহ</td><td>রোল, ইনভাইট, চ্যানেল, চ্যাট ব্যবস্থাপনা</td></tr>
+          <tr><td>ফেজ ৫: Zephyrix Forge ও বট API</td><td>৪ সপ্তাহ</td><td>বট তৈরি, টোকেন, API, ওয়েবহুক</td></tr>
+          <tr><td>ফেজ ৬: 3D/4D পলিশ ও লঞ্চ</td><td>২ সপ্তাহ</td><td>মোশন, পারফরম্যান্স, বিটা রিলিজ</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>আনুমানিক মোট সময়: প্রায় ১৯ সপ্তাহ, একজন ফুল-স্ট্যাক ডেভেলপার ও একজন ডিজাইনারের হিসাবে।</p>
+  </section>
+
+  <section>
+    <h2><span class="num">১৪</span>ঝুঁকি ও সমাধান</h2>
+    <ul>
+      <li><strong>ইমেইল ডেলিভারি:</strong> SPF, DKIM, DMARC আগে থেকে সেট করে ওয়ার্ম-আপ করতে হবে।</li>
+      <li><strong>স্প্যাম ও বট অপব্যবহার:</strong> রেট লিমিট ও কোটা প্রথম দিন থেকেই চালু রাখা।</li>
+      <li><strong>ফাইল দিয়ে ম্যালওয়্যার:</strong> আপলোডের পর স্ক্যান ও টাইপ যাচাই, স্ক্যান শেষ না হলে ডাউনলোড বন্ধ।</li>
+      <li><strong>ভারী অ্যানিমেশন:</strong> মোবাইলে ফ্রেমরেট মাপা, কম গতির মোড সমর্থন।</li>
+      <li><strong>ইউনিক বট নাম:</strong> ট্রেডমার্ক ও বিদ্যমান নাম যাচাই আইনি সমস্যা এড়াতে জরুরি।</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2><span class="num">১৫</span>খোলা প্রশ্ন</h2>
+    <ul>
+      <li>মেসেজ ডেটা সার্ভার-সাইড এনক্রিপশন থাকবে, নাকি প্রথম থেকেই এন্ড-টু-এন্ড ধরা হবে?</li>
+      <li>বট API-তে বিনামূল্যের কোটা কতটুকু হবে?</li>
+      <li>ফাইল আপলোড ২ GB রাখা হবে, নাকি প্রথম সংস্করণে কম রাখা হবে?</li>
+    </ul>
+  </section>
+
+  <footer>Zephyrix PRD · সংস্করণ ১.০ · ড্রাফট</footer>
+</div>
+</body>
+</html>

@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <defs>
+    <linearGradient id="zbg" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0F172A"/>
+      <stop offset="100%" stop-color="#1E1B4B"/>
+    </linearGradient>
+    <linearGradient id="zmark" x1="112" y1="120" x2="400" y2="392" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#22D3EE"/>
+      <stop offset="50%" stop-color="#6D5DF6"/>
+      <stop offset="100%" stop-color="#A855F7"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#zbg)"/>
+  <rect x="24" y="24" width="464" height="464" rx="92" stroke="rgba(255,255,255,0.12)" stroke-width="4"/>
+  <path d="M132 148H380L198 332H380V376H132L314 192H132V148Z" fill="url(#zmark)"/>
+  <circle cx="372" cy="140" r="22" fill="#22D3EE"/>
+</svg>
