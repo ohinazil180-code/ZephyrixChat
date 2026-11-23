@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft,
   BellOff,
+  Bot,
   Check,
   CheckCheck,
   Clock,
@@ -42,6 +43,7 @@ import type {
   UserProfile,
 } from '../types/zephyrix';
 import { Avatar } from './Avatar';
+import { BotBadge, DeveloperBadge, VerifiedBadge } from './Badges';
 
 interface ChatStageProps {
   locale: Locale;
@@ -500,7 +502,18 @@ export const ChatStage: React.FC<ChatStageProps> = ({
               online={chat.type === 'direct' && Boolean(chat.peer?.online)}
             />
             <div className="min-w-0">
-              <h2 className="font-display text-sm sm:text-base font-bold truncate">{chat.title}</h2>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <h2 className="font-display text-sm sm:text-base font-bold truncate">{chat.title}</h2>
+                {chat.type === 'ai' && <BotBadge size="sm" isVerified={true} />}
+                {chat.type === 'direct' && chat.peer?.verified && <VerifiedBadge size="sm" />}
+                {chat.type === 'direct' && chat.peer?.developerBadge && <DeveloperBadge size="sm" />}
+                {chat.assignedBotName && (
+                  <span className="px-2 py-0.5 rounded-full bg-sky-500/15 text-sky-500 text-[10px] font-bold flex items-center gap-1">
+                    <Bot className="w-3 h-3" />
+                    <span>Bot: {chat.assignedBotName}</span>
+                  </span>
+                )}
+              </div>
               <p className="text-xs text-slate-500 dark:text-slate-400 truncate flex items-center gap-1.5">
                 {typingUserIds.length > 0 ? (
                   <span className="text-indigo-600 dark:text-sky-400 font-medium">{t.typing}</span>
@@ -611,11 +624,21 @@ export const ChatStage: React.FC<ChatStageProps> = ({
                       : 'bg-white dark:bg-[#1A2438] text-slate-900 dark:text-slate-100 border border-slate-200 dark:border-white/10 rounded-bl-md'
                   }`}
                 >
-                  {/* Group/Channel sender header */}
-                  {!isMine && (chat.type === 'group' || chat.type === 'channel') && (
-                    <p className="text-[11px] font-semibold text-indigo-500 dark:text-sky-400 mb-1">
-                      {msg.senderName}
-                    </p>
+                  {/* Group/Channel or Bot sender header */}
+                  {!isMine && (chat.type === 'group' || chat.type === 'channel' || chat.type === 'ai' || msg.isBot || String(msg.senderId).startsWith('bot_')) && (
+                    <div className="flex items-center gap-1.5 mb-1 flex-wrap">
+                      <span className="text-[11px] font-semibold text-indigo-500 dark:text-sky-400">
+                        {msg.senderName}
+                      </span>
+                      {(msg.isBot || String(msg.senderId).startsWith('bot_') || chat.type === 'ai') ? (
+                        <BotBadge size="sm" isVerified={msg.senderVerified} />
+                      ) : (
+                        <>
+                          {msg.senderVerified && <VerifiedBadge size="sm" />}
+                          {msg.senderDeveloperBadge && <DeveloperBadge size="sm" />}
+                        </>
+                      )}
+                    </div>
                   )}
 
                   {/* Forwarded attribution */}

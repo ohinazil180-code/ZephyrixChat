@@ -19,6 +19,7 @@ import { formatNumber, formatTime, translations } from '../i18n/translations';
 import { ApiError, apiFetch } from '../lib/api';
 import type { ChatSummary, ChatType, Locale, PeerUser, ThemeMode, UserProfile } from '../types/zephyrix';
 import { Avatar } from './Avatar';
+import { BotBadge, DeveloperBadge, VerifiedBadge } from './Badges';
 import { PWAInstallButton } from './PWAInstallButton';
 
 interface SidebarProps {
@@ -390,11 +391,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
             const avatarKind =
               chat.type === 'saved'
                 ? 'saved'
-                : chat.type === 'channel'
-                  ? 'channel'
-                  : chat.type === 'group'
-                    ? 'group'
-                    : 'user';
+                : chat.type === 'ai'
+                  ? 'bot'
+                  : chat.type === 'channel'
+                    ? 'channel'
+                    : chat.type === 'group'
+                      ? 'group'
+                      : 'user';
 
             return (
               <div
@@ -428,6 +431,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     <div className="flex items-center justify-between gap-2">
                       <span className="font-semibold text-sm truncate flex items-center gap-1.5">
                         <span className="truncate">{chat.title}</span>
+                        {chat.type === 'ai' && <BotBadge size="sm" isVerified={true} />}
+                        {chat.type === 'direct' && chat.peer?.verified && <VerifiedBadge size="sm" />}
+                        {chat.type === 'direct' && chat.peer?.developerBadge && <DeveloperBadge size="sm" />}
+                        {chat.assignedBotName && (
+                          <span className="px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-500 text-[10px] font-bold">
+                            BOT
+                          </span>
+                        )}
                         {chat.mutedUntil && <BellOff className="w-3 h-3 text-slate-400 shrink-0" />}
                       </span>
                       <span className="text-[11px] font-mono-tabular text-slate-400 shrink-0">
@@ -486,11 +497,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
             const avatarKind =
               chat.type === 'saved'
                 ? 'saved'
-                : chat.type === 'channel'
-                  ? 'channel'
-                  : chat.type === 'group'
-                    ? 'group'
-                    : 'user';
+                : chat.type === 'ai'
+                  ? 'bot'
+                  : chat.type === 'channel'
+                    ? 'channel'
+                    : chat.type === 'group'
+                      ? 'group'
+                      : 'user';
 
             return (
               <div
@@ -524,6 +537,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     <div className="flex items-center justify-between gap-2">
                       <span className="font-semibold text-sm truncate flex items-center gap-1.5">
                         <span className="truncate">{chat.title}</span>
+                        {chat.type === 'ai' && <BotBadge size="sm" isVerified={true} />}
+                        {chat.type === 'direct' && chat.peer?.verified && <VerifiedBadge size="sm" />}
+                        {chat.type === 'direct' && chat.peer?.developerBadge && <DeveloperBadge size="sm" />}
+                        {chat.assignedBotName && (
+                          <span className="px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-500 text-[10px] font-bold">
+                            BOT
+                          </span>
+                        )}
                         {chat.mutedUntil && <BellOff className="w-3 h-3 text-slate-400 shrink-0" />}
                       </span>
                       <span className="text-[11px] font-mono-tabular text-slate-400 shrink-0">
@@ -583,7 +604,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 >
                   <Avatar name={u.displayName} src={u.avatarUrl} size="sm" online={u.online} />
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold truncate">{u.displayName}</p>
+                    <div className="flex items-center gap-1.5">
+                      <p className="text-sm font-semibold truncate">{u.displayName}</p>
+                      {u.verified && <VerifiedBadge size="sm" />}
+                      {u.developerBadge && <DeveloperBadge size="sm" />}
+                    </div>
                     <p className="text-xs text-slate-500 dark:text-slate-400 truncate">@{u.username}</p>
                   </div>
                 </button>
@@ -719,7 +744,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       >
                         <Avatar name={u.displayName} src={u.avatarUrl} size="sm" online={u.online} />
                         <div className="flex-1 min-w-0">
-                          <p className="text-sm font-semibold truncate">{u.displayName}</p>
+                          <div className="flex items-center gap-1.5">
+                            <p className="text-sm font-semibold truncate">{u.displayName}</p>
+                            {u.verified && <VerifiedBadge size="sm" />}
+                            {u.developerBadge && <DeveloperBadge size="sm" />}
+                          </div>
                           <p className="text-xs text-slate-500 truncate">@{u.username}</p>
                         </div>
                       </button>
@@ -779,7 +808,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         >
                           <Avatar name={u.displayName} src={u.avatarUrl} size="sm" />
                           <div className="flex-1 min-w-0">
-                            <p className="text-xs font-semibold truncate">{u.displayName}</p>
+                            <div className="flex items-center gap-1.5">
+                              <p className="text-xs font-semibold truncate">{u.displayName}</p>
+                              {u.verified && <VerifiedBadge size="sm" />}
+                              {u.developerBadge && <DeveloperBadge size="sm" />}
+                            </div>
                             <p className="text-[11px] text-slate-500 truncate">@{u.username}</p>
                           </div>
                           {picked && <Check className="w-4 h-4 text-indigo-500 shrink-0" />}

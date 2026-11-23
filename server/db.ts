@@ -198,6 +198,32 @@ export function initDatabase(): void {
       started_at TEXT NOT NULL DEFAULT (datetime('now')),
       ended_at TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS bots (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      handle TEXT NOT NULL UNIQUE,
+      avatar_url TEXT,
+      description TEXT NOT NULL DEFAULT '',
+      provider TEXT NOT NULL DEFAULT 'gemini',
+      model TEXT NOT NULL DEFAULT 'gemini-4-hydrogen',
+      api_endpoint TEXT NOT NULL DEFAULT '',
+      api_key TEXT NOT NULL DEFAULT '',
+      system_instruction TEXT NOT NULL DEFAULT '',
+      is_verified INTEGER NOT NULL DEFAULT 1,
+      assigned_chat_id TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS audit_logs (
+      id TEXT PRIMARY KEY,
+      admin_id TEXT NOT NULL REFERENCES users(id),
+      action TEXT NOT NULL,
+      target_id TEXT NOT NULL,
+      details TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at DESC);
   `);
 
   // Safe additive checks for any pre-existing database files
@@ -206,10 +232,25 @@ export function initDatabase(): void {
   ensureColumn(database, 'users', 'is_admin', "INTEGER NOT NULL DEFAULT 0");
   ensureColumn(database, 'users', 'is_banned', "INTEGER NOT NULL DEFAULT 0");
   ensureColumn(database, 'users', 'ban_reason', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn(database, 'users', 'verified_flag', "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(database, 'users', 'developer_badge', "INTEGER NOT NULL DEFAULT 0");
   ensureColumn(database, 'chats', 'avatar_url', 'TEXT');
   ensureColumn(database, 'chats', 'is_banned', "INTEGER NOT NULL DEFAULT 0");
   ensureColumn(database, 'chats', 'ban_reason', "TEXT NOT NULL DEFAULT ''");
+  ensureColumn(database, 'chats', 'assigned_bot_id', "TEXT");
   ensureColumn(database, 'attachments', 'url', "TEXT NOT NULL DEFAULT ''");
+
+  try {
+    const defaultBot = database.prepare(`SELECT id FROM bots WHERE id = 'bot_zephyrix_ai'`).get();
+    if (!defaultBot) {
+      database.prepare(`
+        INSERT INTO bots (id, name, handle, description, provider, model, is_verified, created_at)
+        VALUES ('bot_zephyrix_ai', 'Zephyrix AI Assistant', 'zephyrix_ai', 'Intelligent multimodal companion powered by Gemini', 'gemini', 'gemini-4-hydrogen', 1, datetime('now'))
+      `).run();
+    }
+  } catch (err) {
+    console.error('[sqlite] Error seeding default bot:', err);
+  }
 
   db = database;
   console.info(`[sqlite] Database initialized at ${dbPathResolved}`);

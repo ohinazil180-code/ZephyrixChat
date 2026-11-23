@@ -14,6 +14,17 @@ import { isValidSafeUrl, sendApiError } from './security.ts';
 import { generateToken04, getZegoCredentials } from './zego.ts';
 import { GoogleGenAI } from '@google/genai';
 
+function recordAuditLog(adminId: string, action: string, targetId: string, details: string): void {
+  try {
+    dbRun(
+      `INSERT INTO audit_logs (id, admin_id, action, target_id, details, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+      [crypto.randomUUID(), adminId, action, targetId, details, nowIso()]
+    );
+  } catch (err) {
+    console.error('[audit] failed to record audit log:', err);
+  }
+}
+
 function normalizeAttachmentsForHydration(rows: Record<string, unknown>[]) {
   return rows.map((a) => ({
     id: String(a.id),
@@ -124,6 +135,8 @@ function hydrateMessages(rows: Record<string, unknown>[], viewerId?: string) {
       senderUsername: row.sender_username ? String(row.sender_username) : null,
       senderAvatar: row.sender_avatar ? String(row.sender_avatar) : null,
       senderVerified: Boolean(row.sender_verified),
+      senderDeveloperBadge: Boolean(row.sender_developer_badge),
+      isBot: Boolean(row.is_bot) || String(senderId).startsWith('bot_'),
       replyToId,
       replyTo: replyToId ? replyMap.get(replyToId) || null : null,
       forwardedFrom: row.forwarded_from ? String(row.forwarded_from) : null,
@@ -147,7 +160,7 @@ function hydrateMessages(rows: Record<string, unknown>[], viewerId?: string) {
 
 function getChatSummariesForUser(userId: string) {
   const chats = dbAll<Record<string, unknown>>(
-    `SELECT c.id, c.type, c.title, c.description, c.avatar_url, c.invite_code, c.zego_room_id,
+    `SELECT c.id, c.type, c.title, c.description, c.avatar_url, c.invite_code, c.zego_room_id, c.assigned_bot_id,
             c.created_by, c.created_at,
             cm.role AS my_role, cm.pinned_at, cm.archived_at, cm.muted_until, cm.last_read_at
      FROM chats c
@@ -175,6 +188,8 @@ function getChatSummariesForUser(userId: string) {
       phone: string;
       country: string;
       verified: boolean;
+      developerBadge?: boolean;
+      isBot?: boolean;
       online: boolean;
       lastSeenAt: string;
     } | null = null;
@@ -183,7 +198,7 @@ function getChatSummariesForUser(userId: string) {
 
     if (type === 'direct') {
       const other = dbGet<Record<string, unknown>>(
-        `SELECT u.id, u.username, u.display_name, u.avatar_url, u.bio, u.phone, u.country, u.verified_flag, u.last_seen_at
+        `SELECT u.id, u.username, u.display_name, u.avatar_url, u.bio, u.phone, u.country, u.verified_flag, u.developer_badge, u.last_seen_at
          FROM chat_members cm
          JOIN users u ON u.id = cm.user_id
          WHERE cm.chat_id = ? AND cm.user_id != ? AND cm.left_at IS NULL AND u.deleted_at IS NULL
@@ -215,8 +230,25 @@ function getChatSummariesForUser(userId: string) {
         phone: String(other.phone || ''),
         country: String(other.country || ''),
         verified: Boolean(other.verified_flag),
+        developerBadge: Boolean(other.developer_badge),
+        isBot: peerId.startsWith('bot_'),
         online: isOnline,
         lastSeenAt: String(other.last_seen_at || nowIso()),
+      };
+    } else if (type === 'ai') {
+      peer = {
+        id: 'bot_zephyrix_ai',
+        username: 'zephyrix_ai',
+        displayName: 'Zephyrix AI Assistant',
+        avatarUrl: null,
+        bio: 'Intelligent multimodal assistant powered by Gemini',
+        phone: '',
+        country: '',
+        verified: true,
+        developerBadge: false,
+        isBot: true,
+        online: true,
+        lastSeenAt: nowIso(),
       };
     }
 
@@ -227,7 +259,7 @@ function getChatSummariesForUser(userId: string) {
 
     const lastMsgRow = dbGet<Record<string, unknown>>(
       `SELECT m.*, u.display_name AS sender_name, u.username AS sender_username,
-              u.avatar_url AS sender_avatar, u.verified_flag AS sender_verified
+              u.avatar_url AS sender_avatar, u.verified_flag AS sender_verified, u.developer_badge AS sender_developer_badge
        FROM messages m
        JOIN users u ON u.id = m.sender_id
        WHERE m.chat_id = ?
@@ -270,6 +302,9 @@ function getChatSummariesForUser(userId: string) {
       hasBlockedMe,
       unreadCount: Number(unreadRow?.cnt || 0),
       lastMessage: hydratedLast,
+      assignedBotId: chat.assigned_bot_id ? String(chat.assigned_bot_id) : (type === 'ai' ? 'bot_zephyrix_ai' : null),
+      assignedBotName: type === 'ai' ? 'Zephyrix AI Assistant' : null,
+      isBotVerified: type === 'ai' ? true : false,
     });
   }
 
@@ -485,7 +520,7 @@ export function registerApiRoutes(app: Express): void {
 
     const rows = q
       ? dbAll<Record<string, unknown>>(
-          `SELECT id, username, display_name, avatar_url, bio, phone, country, verified_flag, last_seen_at
+          `SELECT id, username, display_name, avatar_url, bio, phone, country, verified_flag, developer_badge, last_seen_at
            FROM users
            WHERE deleted_at IS NULL AND id != ?
              AND (LOWER(username) LIKE ? OR LOWER(display_name) LIKE ?)
@@ -494,7 +529,7 @@ export function registerApiRoutes(app: Express): void {
           [userId, `%${q}%`, `%${q}%`]
         )
       : dbAll<Record<string, unknown>>(
-          `SELECT id, username, display_name, avatar_url, bio, phone, country, verified_flag, last_seen_at
+          `SELECT id, username, display_name, avatar_url, bio, phone, country, verified_flag, developer_badge, last_seen_at
            FROM users
            WHERE deleted_at IS NULL AND id != ?
            ORDER BY last_seen_at DESC
@@ -515,6 +550,7 @@ export function registerApiRoutes(app: Express): void {
           phone: String(u.phone || ''),
           country: String(u.country || ''),
           verified: Boolean(u.verified_flag),
+          developerBadge: Boolean(u.developer_badge),
           online: isUserConnectedSse(uid) || Date.now() - lastSeenMs < 2 * 60 * 1000,
           lastSeenAt: String(u.last_seen_at || nowIso()),
         };
@@ -729,7 +765,7 @@ export function registerApiRoutes(app: Express): void {
     }
 
     const members = dbAll<Record<string, unknown>>(
-      `SELECT u.id, u.username, u.display_name, u.avatar_url, u.bio, u.verified_flag, u.last_seen_at,
+      `SELECT u.id, u.username, u.display_name, u.avatar_url, u.bio, u.verified_flag, u.developer_badge, u.last_seen_at,
               cm.role, cm.joined_at
        FROM chat_members cm
        JOIN users u ON u.id = cm.user_id
@@ -746,6 +782,7 @@ export function registerApiRoutes(app: Express): void {
         avatarUrl: m.avatar_url ? String(m.avatar_url) : null,
         bio: String(m.bio || ''),
         verified: Boolean(m.verified_flag),
+        developerBadge: Boolean(m.developer_badge),
         online: isUserConnectedSse(uid) || Date.now() - lastSeenMs < 2 * 60 * 1000,
         role: String(m.role) as 'owner' | 'admin' | 'member',
         joinedAt: String(m.joined_at),
@@ -945,7 +982,7 @@ export function registerApiRoutes(app: Express): void {
     const limit = Math.min(Math.max(Number(req.query.limit) || 60, 1), 150);
     const rows = dbAll<Record<string, unknown>>(
       `SELECT m.*, u.display_name AS sender_name, u.username AS sender_username,
-              u.avatar_url AS sender_avatar, u.verified_flag AS sender_verified
+              u.avatar_url AS sender_avatar, u.verified_flag AS sender_verified, u.developer_badge AS sender_developer_badge
        FROM messages m
        JOIN users u ON u.id = m.sender_id
        WHERE m.chat_id = ?
@@ -1039,7 +1076,7 @@ export function registerApiRoutes(app: Express): void {
     if (clientId) {
       const existing = dbGet<Record<string, unknown>>(
         `SELECT m.*, u.display_name AS sender_name, u.username AS sender_username,
-                u.avatar_url AS sender_avatar, u.verified_flag AS sender_verified
+                u.avatar_url AS sender_avatar, u.verified_flag AS sender_verified, u.developer_badge AS sender_developer_badge
          FROM messages m
          JOIN users u ON u.id = m.sender_id
          WHERE m.chat_id = ? AND m.sender_id = ? AND m.client_id = ?
@@ -1098,7 +1135,7 @@ export function registerApiRoutes(app: Express): void {
 
     const row = dbGet<Record<string, unknown>>(
       `SELECT m.*, u.display_name AS sender_name, u.username AS sender_username,
-              u.avatar_url AS sender_avatar, u.verified_flag AS sender_verified
+              u.avatar_url AS sender_avatar, u.verified_flag AS sender_verified, u.developer_badge AS sender_developer_badge
        FROM messages m
        JOIN users u ON u.id = m.sender_id
        WHERE m.id = ?`,
@@ -1108,6 +1145,14 @@ export function registerApiRoutes(app: Express): void {
     const hydrated = row ? hydrateMessages([row], userId)[0] : null;
     if (hydrated) {
       publishToChat(chatId, { type: 'message:new', chatId, message: hydrated }, userId);
+    }
+
+    // If conversation is AI assistant or has assigned bot, trigger automated AI response
+    const botToTrigger = chat.type === 'ai' ? 'bot_zephyrix_ai' : (chat as any).assigned_bot_id;
+    if (botToTrigger) {
+      setTimeout(() => {
+        void triggerBotReply(chatId, botToTrigger, body.trim(), attachments[0]?.url);
+      }, 100);
     }
 
     res.status(201).json({ message: hydrated });
@@ -1137,7 +1182,7 @@ export function registerApiRoutes(app: Express): void {
     dbRun(`UPDATE messages SET body = ?, edited_at = ? WHERE id = ?`, [body, nowIso(), msgId]);
     const row = dbGet<Record<string, unknown>>(
       `SELECT m.*, u.display_name AS sender_name, u.username AS sender_username,
-              u.avatar_url AS sender_avatar, u.verified_flag AS sender_verified
+              u.avatar_url AS sender_avatar, u.verified_flag AS sender_verified, u.developer_badge AS sender_developer_badge
        FROM messages m JOIN users u ON u.id = m.sender_id WHERE m.id = ?`,
       [msgId]
     );
@@ -1193,7 +1238,7 @@ export function registerApiRoutes(app: Express): void {
 
     const row = dbGet<Record<string, unknown>>(
       `SELECT m.*, u.display_name AS sender_name, u.username AS sender_username,
-              u.avatar_url AS sender_avatar, u.verified_flag AS sender_verified
+              u.avatar_url AS sender_avatar, u.verified_flag AS sender_verified, u.developer_badge AS sender_developer_badge
        FROM messages m JOIN users u ON u.id = m.sender_id WHERE m.id = ?`,
       [msgId]
     );
@@ -1245,7 +1290,7 @@ export function registerApiRoutes(app: Express): void {
 
     const row = dbGet<Record<string, unknown>>(
       `SELECT m.*, u.display_name AS sender_name, u.username AS sender_username,
-              u.avatar_url AS sender_avatar, u.verified_flag AS sender_verified
+              u.avatar_url AS sender_avatar, u.verified_flag AS sender_verified, u.developer_badge AS sender_developer_badge
        FROM messages m JOIN users u ON u.id = m.sender_id WHERE m.id = ?`,
       [msgId]
     );
@@ -1347,10 +1392,131 @@ export function registerApiRoutes(app: Express): void {
     res.json({ ok: true });
   });
 
-  // Zephyrix AI Assistant (Gemini gemini-4-hydrogen)
+  async function triggerBotReply(
+    chatId: string,
+    botId: string,
+    userPrompt: string,
+    attachmentUrl?: string
+  ): Promise<ChatMessage | null> {
+    const bot = dbGet<Record<string, unknown>>(`SELECT * FROM bots WHERE id = ?`, [botId]) || {
+      id: 'bot_zephyrix_ai',
+      name: 'Zephyrix AI Assistant',
+      handle: 'zephyrix_ai',
+      provider: 'gemini',
+      model: 'gemini-4-hydrogen',
+      system_instruction:
+        'You are Zephyrix AI Assistant, a friendly, intelligent, and multimodal companion built into Zephyrix. Provide helpful, accurate, and concise responses in English or Bengali depending on the user query.',
+      is_verified: 1,
+    };
+
+    const botUserId = String(bot.id || 'bot_zephyrix_ai');
+    const botName = String(bot.name || 'Zephyrix AI Assistant');
+    const botHandle = String(bot.handle || 'zephyrix_ai');
+    const botIsVerified = Boolean(bot.is_verified);
+
+    // Ensure bot exists in users table so foreign keys and joins work flawlessly
+    dbRun(
+      `INSERT INTO users (id, email, password_hash, username, display_name, verified_flag, developer_badge, preferred_locale, last_seen_at, created_at)
+       VALUES (?, ?, 'BOT_NO_LOGIN', ?, ?, ?, 0, 'en', datetime('now'), datetime('now'))
+       ON CONFLICT(id) DO UPDATE SET display_name = excluded.display_name, username = excluded.username, verified_flag = excluded.verified_flag`,
+      [botUserId, `${botHandle}@zephyrix.ai`, botHandle, botName, botIsVerified ? 1 : 0]
+    );
+
+    let replyText = `Hello! I am ${botName}. I have received your message.`;
+    const provider = String(bot.provider || 'gemini');
+    const model = String(bot.model || 'gemini-4-hydrogen');
+    const systemPrompt = String(
+      bot.system_instruction ||
+        'You are Zephyrix AI Assistant, a friendly, intelligent, and multimodal companion built into Zephyrix. Provide helpful, accurate, and concise responses in English or Bengali depending on the user query.'
+    );
+
+    let prompt = userPrompt;
+    if (attachmentUrl) {
+      prompt = `[User uploaded attachment: ${attachmentUrl}]\n${userPrompt || 'Please review this file or voice note.'}`;
+    }
+
+    if (provider === 'gemini') {
+      try {
+        const apiKey = process.env.GEMINI_API_KEY;
+        if (apiKey) {
+          const ai = new GoogleGenAI({
+            apiKey,
+            httpOptions: {
+              headers: { 'User-Agent': 'aistudio-build' },
+            },
+          });
+          const resp = await ai.models.generateContent({
+            model,
+            contents: prompt,
+            config: {
+              systemInstruction: systemPrompt,
+            },
+          });
+          if (resp.text) {
+            replyText = resp.text;
+          }
+        }
+      } catch (err) {
+        console.error('[bot] Gemini generation error:', err instanceof Error ? err.message : 'unknown');
+        replyText = `I received your message, but encountered an error connecting to Gemini AI model (${model}). Please check your API key in Settings.`;
+      }
+    } else if (bot.api_endpoint) {
+      try {
+        const endpoint = String(bot.api_endpoint);
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(bot.api_key ? { Authorization: `Bearer ${bot.api_key}` } : {}),
+          },
+          body: JSON.stringify({
+            prompt,
+            systemInstruction: systemPrompt,
+            model,
+            attachmentUrl,
+          }),
+        });
+        if (res.ok) {
+          const json = (await res.json().catch(() => null)) as Record<string, unknown> | null;
+          if (json && typeof json.reply === 'string') {
+            replyText = json.reply;
+          } else if (json && typeof json.text === 'string') {
+            replyText = json.text;
+          } else if (json && Array.isArray((json as any).choices) && (json as any).choices[0]?.message?.content) {
+            replyText = (json as any).choices[0].message.content;
+          }
+        }
+      } catch (err) {
+        console.error('[bot] Custom endpoint error:', err instanceof Error ? err.message : 'unknown');
+      }
+    }
+
+    const aiMsgId = crypto.randomUUID();
+    const aiNow = nowIso();
+    dbRun(
+      `INSERT INTO messages (id, chat_id, sender_id, body, created_at) VALUES (?, ?, ?, ?, ?)`,
+      [aiMsgId, chatId, botUserId, replyText, aiNow]
+    );
+
+    const aiMsgRow = dbGet<Record<string, unknown>>(
+      `SELECT m.*, u.display_name AS sender_name, u.username AS sender_username,
+              u.avatar_url AS sender_avatar, u.verified_flag AS sender_verified, u.developer_badge AS sender_developer_badge
+       FROM messages m
+       JOIN users u ON u.id = m.sender_id
+       WHERE m.id = ?`,
+      [aiMsgId]
+    );
+    const hydrated = aiMsgRow ? hydrateMessages([aiMsgRow], '')[0] : null;
+    if (hydrated) {
+      publishToChat(chatId, { type: 'message:new', chatId, message: hydrated });
+    }
+    return hydrated;
+  }
+
+  // Zephyrix AI Assistant endpoint (supports text, file attachments & voice notes)
   app.post('/api/v1/ai/chat', requireAuth, async (req: AuthRequest, res) => {
     const userId = req.authUser!.id;
-    const body = req.body as { chatId?: string; message?: string; attachmentUrl?: string };
+    const body = req.body as { chatId?: string; message?: string; attachmentUrl?: string; botId?: string };
     const chatId = String(body.chatId || '').trim();
     const promptText = String(body.message || '').trim();
 
@@ -1359,12 +1525,12 @@ export function registerApiRoutes(app: Express): void {
       return;
     }
 
-    const chat = dbGet<{ id: string; type: string }>(
-      `SELECT id, type FROM chats WHERE id = ? AND type = 'ai' AND deleted_at IS NULL`,
+    const chat = dbGet<{ id: string; type: string; assigned_bot_id: string | null }>(
+      `SELECT id, type, assigned_bot_id FROM chats WHERE id = ? AND deleted_at IS NULL`,
       [chatId]
     );
     if (!chat) {
-      sendApiError(res, 404, 'CHAT_NOT_FOUND', 'AI conversation not found.');
+      sendApiError(res, 404, 'CHAT_NOT_FOUND', 'Conversation not found.');
       return;
     }
 
@@ -1392,51 +1558,19 @@ export function registerApiRoutes(app: Express): void {
       }
     });
 
-    const userMsgRow = dbGet<Record<string, unknown>>(`SELECT * FROM messages WHERE id = ?`, [userMsgId]);
+    const userMsgRow = dbGet<Record<string, unknown>>(
+      `SELECT m.*, u.display_name AS sender_name, u.username AS sender_username,
+              u.avatar_url AS sender_avatar, u.verified_flag AS sender_verified, u.developer_badge AS sender_developer_badge
+       FROM messages m JOIN users u ON u.id = m.sender_id WHERE m.id = ?`,
+      [userMsgId]
+    );
     const hydratedUserMsg = userMsgRow ? hydrateMessages([userMsgRow], userId)[0] : null;
     if (hydratedUserMsg) {
       publishToChat(chatId, { type: 'message:new', chatId, message: hydratedUserMsg });
     }
 
-    let aiReply = "I'm Zephyrix AI Assistant. How can I help you today?";
-    try {
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (apiKey) {
-        const ai = new GoogleGenAI({
-          apiKey,
-          httpOptions: {
-            headers: { 'User-Agent': 'aistudio-build' },
-          },
-        });
-        const resp = await ai.models.generateContent({
-          model: 'gemini-4-hydrogen',
-          contents: promptText,
-          config: {
-            systemInstruction:
-              'You are Zephyrix AI Assistant, a friendly, intelligent, and multimodal companion built into Zephyrix. Provide helpful, accurate, and concise responses in English or Bengali depending on the user query.',
-          },
-        });
-        if (resp.text) {
-          aiReply = resp.text;
-        }
-      }
-    } catch (err) {
-      console.error('[ai] Gemini generation error:', err instanceof Error ? err.message : 'unknown');
-      aiReply = "I received your message, but encountered an error connecting to Gemini AI. Please check your API key in Settings > Secrets.";
-    }
-
-    const aiMsgId = crypto.randomUUID();
-    const aiNow = nowIso();
-    dbRun(
-      `INSERT INTO messages (id, chat_id, sender_id, body, created_at) VALUES (?, ?, ?, ?, ?)`,
-      [aiMsgId, chatId, userId, aiReply, aiNow]
-    );
-
-    const aiMsgRow = dbGet<Record<string, unknown>>(`SELECT * FROM messages WHERE id = ?`, [aiMsgId]);
-    const hydratedAiMsg = aiMsgRow ? hydrateMessages([aiMsgRow], userId)[0] : null;
-    if (hydratedAiMsg) {
-      publishToChat(chatId, { type: 'message:new', chatId, message: hydratedAiMsg });
-    }
+    const botIdToUse = body.botId || chat.assigned_bot_id || 'bot_zephyrix_ai';
+    const hydratedAiMsg = await triggerBotReply(chatId, botIdToUse, promptText, body.attachmentUrl);
 
     res.json({ message: hydratedAiMsg });
   });
@@ -1452,6 +1586,23 @@ export function registerApiRoutes(app: Express): void {
        FROM users WHERE deleted_at IS NULL ORDER BY created_at DESC`
     );
     res.json({ users });
+  });
+
+  // Admin: Get audit logs
+  app.get('/api/v1/admin/audit-logs', requireAuth, (req: AuthRequest, res) => {
+    if (!req.authUser!.is_admin) {
+      sendApiError(res, 403, 'FORBIDDEN', 'Administrator privileges required.');
+      return;
+    }
+    const logs = dbAll<Record<string, unknown>>(
+      `SELECT al.id, al.action, al.target_id, al.details, al.created_at,
+              u.display_name AS admin_name, u.username AS admin_username
+       FROM audit_logs al
+       JOIN users u ON u.id = al.admin_id
+       ORDER BY al.created_at DESC
+       LIMIT 100`
+    );
+    res.json({ logs });
   });
 
   // Admin: Update user badges (verified, developer)
@@ -1477,6 +1628,7 @@ export function registerApiRoutes(app: Express): void {
     if (updates.length > 0) {
       params.push(targetId);
       dbRun(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, params);
+      recordAuditLog(req.authUser!.id, 'UPDATE_USER_BADGES', targetId, JSON.stringify(body));
     }
     res.json({ ok: true });
   });
@@ -1570,6 +1722,235 @@ export function registerApiRoutes(app: Express): void {
     }
 
     publishToChat(chatId, { type: 'chat:updated', chatId });
+    res.json({ ok: true });
+  });
+
+  // Admin: Bot Manager - Get all registered bots
+  app.get('/api/v1/admin/bots', requireAuth, (req: AuthRequest, res) => {
+    if (!req.authUser!.is_admin) {
+      sendApiError(res, 403, 'FORBIDDEN', 'Administrator privileges required.');
+      return;
+    }
+    const bots = dbAll<Record<string, unknown>>(
+      `SELECT b.*, c.title AS assigned_chat_title
+       FROM bots b
+       LEFT JOIN chats c ON c.id = b.assigned_chat_id
+       ORDER BY b.created_at ASC`
+    );
+    res.json({
+      bots: bots.map((b) => ({
+        id: String(b.id),
+        name: String(b.name),
+        handle: String(b.handle),
+        avatar_url: b.avatar_url ? String(b.avatar_url) : null,
+        description: String(b.description || ''),
+        provider: String(b.provider || 'gemini'),
+        model: String(b.model || 'gemini-4-hydrogen'),
+        api_endpoint: String(b.api_endpoint || ''),
+        system_instruction: String(b.system_instruction || ''),
+        is_verified: Boolean(b.is_verified),
+        assigned_chat_id: b.assigned_chat_id ? String(b.assigned_chat_id) : null,
+        assigned_chat_title: b.assigned_chat_title ? String(b.assigned_chat_title) : null,
+        created_at: String(b.created_at),
+      })),
+    });
+  });
+
+  // Admin: Bot Manager - Register new AI Bot
+  app.post('/api/v1/admin/bots', requireAuth, (req: AuthRequest, res) => {
+    if (!req.authUser!.is_admin) {
+      sendApiError(res, 403, 'FORBIDDEN', 'Administrator privileges required.');
+      return;
+    }
+    const body = req.body as {
+      name?: string;
+      handle?: string;
+      avatar_url?: string;
+      description?: string;
+      provider?: string;
+      model?: string;
+      api_endpoint?: string;
+      api_key?: string;
+      system_instruction?: string;
+      is_verified?: boolean;
+      assigned_chat_id?: string;
+    };
+
+    const name = String(body.name || '').trim();
+    const handle = String(body.handle || '').trim().replace(/^@/, '').toLowerCase();
+    if (!name || !handle) {
+      sendApiError(res, 400, 'INVALID_INPUT', 'Bot name and handle are required.');
+      return;
+    }
+
+    const existing = dbGet<{ id: string }>(`SELECT id FROM bots WHERE handle = ?`, [handle]);
+    if (existing) {
+      sendApiError(res, 409, 'HANDLE_EXISTS', 'A bot with this handle already exists.');
+      return;
+    }
+
+    const botId = `bot_${crypto.randomUUID()}`;
+    const now = nowIso();
+    const assignedChatId = body.assigned_chat_id ? String(body.assigned_chat_id).trim() : null;
+    const isVerified = body.is_verified !== false ? 1 : 0;
+
+    withTx(() => {
+      dbRun(
+        `INSERT INTO bots (id, name, handle, avatar_url, description, provider, model, api_endpoint, api_key, system_instruction, is_verified, assigned_chat_id, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          botId,
+          name,
+          handle,
+          body.avatar_url || null,
+          body.description || '',
+          body.provider || 'gemini',
+          body.model || 'gemini-4-hydrogen',
+          body.api_endpoint || '',
+          body.api_key || '',
+          body.system_instruction || '',
+          isVerified,
+          assignedChatId,
+          now,
+        ]
+      );
+
+      // Create bot user in users table for FK integrity and verified badge display
+      dbRun(
+        `INSERT INTO users (id, email, password_hash, username, display_name, verified_flag, developer_badge, preferred_locale, last_seen_at, created_at)
+         VALUES (?, ?, 'BOT_NO_LOGIN', ?, ?, ?, 0, 'en', datetime('now'), datetime('now'))
+         ON CONFLICT(id) DO UPDATE SET display_name = excluded.display_name, username = excluded.username, verified_flag = excluded.verified_flag`,
+        [botId, `${handle}@zephyrix.ai`, handle, name, isVerified]
+      );
+
+      if (assignedChatId) {
+        dbRun(`UPDATE chats SET assigned_bot_id = ? WHERE id = ?`, [botId, assignedChatId]);
+        dbRun(
+          `INSERT OR IGNORE INTO chat_members (chat_id, user_id, role, joined_at, last_read_at)
+           VALUES (?, ?, 'member', datetime('now'), datetime('now'))`,
+          [assignedChatId, botId]
+        );
+      }
+    });
+
+    const row = dbGet<Record<string, unknown>>(`SELECT * FROM bots WHERE id = ?`, [botId]);
+    res.status(201).json({ bot: row });
+  });
+
+  // Admin: Bot Manager - Update bot settings, verified badge, or assigned channel
+  app.patch('/api/v1/admin/bots/:id', requireAuth, (req: AuthRequest, res) => {
+    if (!req.authUser!.is_admin) {
+      sendApiError(res, 403, 'FORBIDDEN', 'Administrator privileges required.');
+      return;
+    }
+    const botId = String(req.params.id);
+    const body = req.body as {
+      name?: string;
+      handle?: string;
+      description?: string;
+      provider?: string;
+      model?: string;
+      api_endpoint?: string;
+      api_key?: string;
+      system_instruction?: string;
+      is_verified?: boolean;
+      assigned_chat_id?: string | null;
+    };
+
+    const existing = dbGet<{ id: string; assigned_chat_id: string | null }>(`SELECT id, assigned_chat_id FROM bots WHERE id = ?`, [botId]);
+    if (!existing) {
+      sendApiError(res, 404, 'BOT_NOT_FOUND', 'Bot record not found.');
+      return;
+    }
+
+    const updates: string[] = [];
+    const params: (string | number | null)[] = [];
+
+    if (typeof body.name === 'string') {
+      updates.push('name = ?');
+      params.push(body.name.trim());
+    }
+    if (typeof body.handle === 'string') {
+      updates.push('handle = ?');
+      params.push(body.handle.trim().replace(/^@/, '').toLowerCase());
+    }
+    if (typeof body.description === 'string') {
+      updates.push('description = ?');
+      params.push(body.description.trim());
+    }
+    if (typeof body.provider === 'string') {
+      updates.push('provider = ?');
+      params.push(body.provider);
+    }
+    if (typeof body.model === 'string') {
+      updates.push('model = ?');
+      params.push(body.model);
+    }
+    if (typeof body.api_endpoint === 'string') {
+      updates.push('api_endpoint = ?');
+      params.push(body.api_endpoint.trim());
+    }
+    if (typeof body.api_key === 'string') {
+      updates.push('api_key = ?');
+      params.push(body.api_key);
+    }
+    if (typeof body.system_instruction === 'string') {
+      updates.push('system_instruction = ?');
+      params.push(body.system_instruction);
+    }
+    if (typeof body.is_verified === 'boolean') {
+      updates.push('is_verified = ?');
+      params.push(body.is_verified ? 1 : 0);
+      dbRun(`UPDATE users SET verified_flag = ? WHERE id = ?`, [body.is_verified ? 1 : 0, botId]);
+    }
+    if (body.assigned_chat_id !== undefined) {
+      const nextChatId = body.assigned_chat_id ? String(body.assigned_chat_id).trim() : null;
+      updates.push('assigned_chat_id = ?');
+      params.push(nextChatId);
+
+      // Clear previous assignment
+      if (existing.assigned_chat_id && existing.assigned_chat_id !== nextChatId) {
+        dbRun(`UPDATE chats SET assigned_bot_id = NULL WHERE id = ? AND assigned_bot_id = ?`, [
+          existing.assigned_chat_id,
+          botId,
+        ]);
+      }
+      // Set new assignment
+      if (nextChatId) {
+        dbRun(`UPDATE chats SET assigned_bot_id = ? WHERE id = ?`, [botId, nextChatId]);
+        dbRun(
+          `INSERT OR IGNORE INTO chat_members (chat_id, user_id, role, joined_at, last_read_at)
+           VALUES (?, ?, 'member', datetime('now'), datetime('now'))`,
+          [nextChatId, botId]
+        );
+      }
+    }
+
+    if (updates.length > 0) {
+      params.push(botId);
+      dbRun(`UPDATE bots SET ${updates.join(', ')} WHERE id = ?`, params);
+    }
+
+    res.json({ ok: true });
+  });
+
+  // Admin: Bot Manager - Delete custom bot
+  app.delete('/api/v1/admin/bots/:id', requireAuth, (req: AuthRequest, res) => {
+    if (!req.authUser!.is_admin) {
+      sendApiError(res, 403, 'FORBIDDEN', 'Administrator privileges required.');
+      return;
+    }
+    const botId = String(req.params.id);
+    if (botId === 'bot_zephyrix_ai') {
+      sendApiError(res, 400, 'PROTECTED_BOT', 'Default Zephyrix AI Assistant cannot be deleted.');
+      return;
+    }
+
+    withTx(() => {
+      dbRun(`UPDATE chats SET assigned_bot_id = NULL WHERE assigned_bot_id = ?`, [botId]);
+      dbRun(`DELETE FROM bots WHERE id = ?`, [botId]);
+    });
+
     res.json({ ok: true });
   });
 }

@@ -1,6 +1,6 @@
 export type Locale = 'en' | 'bn';
 export type ThemeMode = 'dark' | 'light';
-export type ChatType = 'direct' | 'group' | 'channel' | 'saved';
+export type ChatType = 'direct' | 'group' | 'channel' | 'saved' | 'ai';
 
 export interface SystemConfig {
   zegoConfigured: boolean;
@@ -31,6 +31,8 @@ export interface PeerUser {
   phone?: string;
   country?: string;
   verified: boolean;
+  developerBadge?: boolean;
+  isBot?: boolean;
   online: boolean;
   lastSeenAt: string;
 }
@@ -74,6 +76,8 @@ export interface ChatMessage {
   senderUsername: string | null;
   senderAvatar: string | null;
   senderVerified: boolean;
+  senderDeveloperBadge?: boolean;
+  isBot?: boolean;
   replyToId?: string | null;
   replyTo?: MessageReplyPreview | null;
   forwardedFrom?: string | null;
@@ -108,6 +112,26 @@ export interface ChatSummary {
   hasBlockedMe: boolean;
   unreadCount: number;
   lastMessage: ChatMessage | null;
+  assignedBotId?: string | null;
+  assignedBotName?: string | null;
+  isBotVerified?: boolean;
+}
+
+export interface BotConfig {
+  id: string;
+  name: string;
+  handle: string;
+  avatar_url?: string | null;
+  description: string;
+  provider: 'gemini' | 'custom' | 'openai';
+  model: string;
+  api_endpoint: string;
+  api_key?: string;
+  system_instruction: string;
+  is_verified: boolean;
+  assigned_chat_id?: string | null;
+  assigned_chat_title?: string | null;
+  created_at: string;
 }
 
 export interface SessionInfo {

@@ -238,7 +238,7 @@ export function registerAuthRoutes(app: Express): void {
         return;
       }
 
-      const userCountRow = dbGet<{ cnt: number }>(`SELECT COUNT(*) AS cnt FROM users`);
+      const userCountRow = dbGet<{ cnt: number }>(`SELECT COUNT(*) AS cnt FROM users WHERE deleted_at IS NULL`);
       const isFirstUser = Number(userCountRow?.cnt || 0) === 0;
       const isAdmin = isFirstUser ? 1 : 0;
 

@@ -19,6 +19,7 @@ import { formatTime, translations } from '../i18n/translations';
 import { apiFetch } from '../lib/api';
 import type { ChatMember, ChatMessage, ChatSummary, Locale, MessageAttachment, PeerUser, UserProfile } from '../types/zephyrix';
 import { Avatar } from './Avatar';
+import { BotBadge, DeveloperBadge, VerifiedBadge } from './Badges';
 
 interface InfoDrawerProps {
   locale: Locale;
@@ -197,11 +198,11 @@ export const InfoDrawer: React.FC<InfoDrawerProps> = ({
                 online={chat.type === 'direct' && Boolean(chat.peer?.online)}
               />
               <div className="space-y-1">
-                <div className="flex items-center justify-center gap-1.5">
+                <div className="flex items-center justify-center gap-1.5 flex-wrap">
                   <p className="font-display text-lg font-bold">{chat.title}</p>
-                  {chat.peer?.verified && (
-                    <CheckCircle2 className="w-4 h-4 text-sky-500" aria-label={t.verifiedBadge} />
-                  )}
+                  {(chat.type === 'ai' || chat.peer?.isBot || Boolean(chat.assignedBotId)) && <BotBadge />}
+                  {(chat.peer?.verified || chat.isBotVerified) && <VerifiedBadge />}
+                  {chat.peer?.developerBadge && <DeveloperBadge />}
                 </div>
                 {chat.peer?.username && (
                   <p className="text-xs font-mono-tabular text-indigo-500">@{chat.peer.username}</p>
@@ -353,7 +354,12 @@ export const InfoDrawer: React.FC<InfoDrawerProps> = ({
                       >
                         <Avatar name={u.displayName} src={u.avatarUrl} size="sm" />
                         <div className="min-w-0 flex-1">
-                          <p className="text-xs font-semibold truncate">{u.displayName}</p>
+                          <div className="flex items-center gap-1 min-w-0">
+                            <p className="text-xs font-semibold truncate">{u.displayName}</p>
+                            {u.isBot && <BotBadge />}
+                            {u.verified && <VerifiedBadge />}
+                            {u.developerBadge && <DeveloperBadge />}
+                          </div>
                           <p className="text-[11px] text-slate-500 truncate">@{u.username}</p>
                         </div>
                       </button>
@@ -371,7 +377,12 @@ export const InfoDrawer: React.FC<InfoDrawerProps> = ({
                   <div className="flex items-center gap-2.5 min-w-0">
                     <Avatar name={m.displayName} src={m.avatarUrl} size="sm" online={m.online} />
                     <div className="min-w-0">
-                      <p className="text-xs font-semibold truncate">{m.displayName}</p>
+                      <div className="flex items-center gap-1 min-w-0">
+                        <p className="text-xs font-semibold truncate">{m.displayName}</p>
+                        {m.isBot && <BotBadge />}
+                        {m.verified && <VerifiedBadge />}
+                        {m.developerBadge && <DeveloperBadge />}
+                      </div>
                       <p className="text-[11px] text-slate-500 truncate">
                         @{m.username} · {m.role}
                       </p>

@@ -18,6 +18,7 @@ import { formatDateDivider, translations } from '../i18n/translations';
 import { ApiError, apiFetch, uploadMediaFile } from '../lib/api';
 import type { Locale, SessionInfo, ThemeMode, UserProfile } from '../types/zephyrix';
 import { Avatar } from './Avatar';
+import { AdminBadge, DeveloperBadge, VerifiedBadge } from './Badges';
 import { PWAInstallButton } from './PWAInstallButton';
 
 interface SettingsModalProps {
@@ -346,6 +347,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <div className="flex items-center gap-4">
                   <Avatar name={displayName || user.display_name} src={avatarUrl || null} size="xl" />
                   <div className="space-y-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-display text-sm font-bold">{user.display_name}</span>
+                      {user.is_admin && <AdminBadge />}
+                      {user.verified_flag && <VerifiedBadge />}
+                      {user.developer_badge && <DeveloperBadge />}
+                    </div>
                     <input
                       ref={avatarInputRef}
                       type="file"
@@ -353,16 +360,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       className="hidden"
                       onChange={handleAvatarUpload}
                     />
-                    <button
-                      type="button"
-                      disabled={uploadingAvatar}
-                      onClick={() => avatarInputRef.current?.click()}
-                      className="min-h-[44px] px-4 rounded-xl border border-slate-200 dark:border-white/15 inline-flex items-center gap-2 text-xs font-semibold hover:bg-slate-100 dark:hover:bg-white/5"
-                    >
-                      <Camera className="w-4 h-4 text-indigo-500" />
-                      <span>{uploadingAvatar ? t.uploadingLabel : t.avatarChangeBtn}</span>
-                    </button>
-                    <p className="text-[11px] text-slate-400">{user.email}</p>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        disabled={uploadingAvatar}
+                        onClick={() => avatarInputRef.current?.click()}
+                        className="min-h-[44px] px-4 rounded-xl border border-slate-200 dark:border-white/15 inline-flex items-center gap-2 text-xs font-semibold hover:bg-slate-100 dark:hover:bg-white/5"
+                      >
+                        <Camera className="w-4 h-4 text-indigo-500" />
+                        <span>{uploadingAvatar ? t.uploadingLabel : t.avatarChangeBtn}</span>
+                      </button>
+                      <p className="text-[11px] text-slate-400">{user.email}</p>
+                    </div>
                   </div>
                 </div>
 
