@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import type { IncomingMessage } from 'node:http';
 import type { Express, NextFunction, Request, Response } from 'express';
 import { z } from 'zod';
 import { dbAll, dbGet, dbRun, nowIso, withTx } from './db.ts';
@@ -106,6 +107,70 @@ function mapUserRow(row: Record<string, unknown>): AuthenticatedUser {
     is_admin: Boolean(row.is_admin),
     is_banned: Boolean(row.is_banned),
   };
+}
+
+function parseCookieHeader(cookieHeader: string | undefined): Record<string, string> {
+  const result: Record<string, string> = {};
+  if (!cookieHeader) return result;
+  for (const part of cookieHeader.split(';')) {
+    const idx = part.indexOf('=');
+    if (idx <= 0) continue;
+    const key = part.slice(0, idx).trim();
+    const val = part.slice(idx + 1).trim();
+    try {
+      result[key] = decodeURIComponent(val);
+    } catch {
+      result[key] = val;
+    }
+  }
+  return result;
+}
+
+export function authenticateWsRequest(req: IncomingMessage): { userId: string; sessionId: string } | null {
+  try {
+    let rawToken: string | null = null;
+    const authHeader = req.headers.authorization;
+    if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
+      rawToken = authHeader.slice(7).trim();
+    }
+    if (!rawToken) {
+      const cookies = parseCookieHeader(req.headers.cookie);
+      if (cookies[SESSION_COOKIE_NAME]) {
+        rawToken = cookies[SESSION_COOKIE_NAME];
+      }
+    }
+    if (!rawToken && req.url) {
+      const parsed = new URL(req.url, 'http://localhost');
+      const queryToken = parsed.searchParams.get('token');
+      if (queryToken) rawToken = queryToken.trim();
+    }
+    if (!rawToken) return null;
+
+    const tokenHash = hashToken(rawToken);
+    const now = nowIso();
+    const row = dbGet<{
+      session_id: string;
+      expires_at: string;
+      revoked_at: string | null;
+      user_id: string;
+      is_banned: number;
+      deleted_at: string | null;
+    }>(
+      `SELECT s.id AS session_id, s.expires_at, s.revoked_at,
+              u.id AS user_id, u.is_banned, u.deleted_at
+       FROM sessions s
+       JOIN users u ON u.id = s.user_id
+       WHERE s.token_hash = ?
+       LIMIT 1`,
+      [tokenHash]
+    );
+    if (!row || row.revoked_at || row.deleted_at || String(row.expires_at) <= now || Boolean(row.is_banned)) {
+      return null;
+    }
+    return { userId: String(row.user_id), sessionId: String(row.session_id) };
+  } catch {
+    return null;
+  }
 }
 
 export function requireAuth(req: AuthRequest, res: Response, next: NextFunction): void {

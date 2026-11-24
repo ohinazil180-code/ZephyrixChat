@@ -6,9 +6,13 @@ let db: DatabaseSync | null = null;
 let dbPathResolved = '';
 
 export function getDataDir(): string {
-  const configured = process.env.SQLITE_PATH?.trim();
-  if (configured) {
-    return path.dirname(path.resolve(configured));
+  const configuredDb = process.env.SQLITE_PATH?.trim();
+  if (configuredDb) {
+    return path.dirname(path.resolve(configuredDb));
+  }
+  const configuredDir = process.env.DATA_DIR?.trim();
+  if (configuredDir) {
+    return path.resolve(configuredDir);
   }
   return path.resolve(process.cwd(), 'data');
 }
@@ -278,6 +282,17 @@ export function withTx<T>(fn: () => T): T {
   } catch (err) {
     database.exec('ROLLBACK');
     throw err;
+  }
+}
+
+export function closeDatabase(): void {
+  if (!db) return;
+  try {
+    db.close();
+  } catch (err) {
+    console.error('[sqlite] Error closing database:', err);
+  } finally {
+    db = null;
   }
 }
 

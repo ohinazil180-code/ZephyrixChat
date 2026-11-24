@@ -6,6 +6,9 @@ import {
   Check,
   CheckCircle2,
   Copy,
+  Download,
+  Eye,
+  FileText,
   LogOut,
   MapPin,
   Phone,
@@ -15,7 +18,7 @@ import {
   UserPlus,
   X,
 } from 'lucide-react';
-import { formatTime, translations } from '../i18n/translations';
+import { formatBytes, formatTime, translations } from '../i18n/translations';
 import { apiFetch } from '../lib/api';
 import type { ChatMember, ChatMessage, ChatSummary, Locale, MessageAttachment, PeerUser, UserProfile } from '../types/zephyrix';
 import { Avatar } from './Avatar';
@@ -416,27 +419,71 @@ export const InfoDrawer: React.FC<InfoDrawerProps> = ({
         )}
 
         {tab === 'media' && (
-          <div className="grid grid-cols-3 gap-2">
-            {sharedMedia.filter((a) => a.kind === 'image').length === 0 ? (
-              <p className="col-span-3 text-xs text-center text-slate-500 py-8">{t.noMessagesYet}</p>
+          <div className="space-y-4">
+            {sharedMedia.filter((a) => a.kind === 'image' || a.kind === 'document').length === 0 ? (
+              <p className="text-xs text-center text-slate-500 py-8">{t.noMessagesYet}</p>
             ) : (
-              sharedMedia
-                .filter((a) => a.kind === 'image')
-                .map((att, i) => (
-                  <button
-                    key={`${att.storageKey}-${i}`}
-                    type="button"
-                    onClick={() => onOpenLightbox(att)}
-                    className="aspect-square rounded-xl overflow-hidden border border-slate-200 dark:border-white/10"
-                  >
-                    <img
-                      src={att.url}
-                      alt={att.originalName}
-                      referrerPolicy="no-referrer"
-                      className="w-full h-full object-cover"
-                    />
-                  </button>
-                ))
+              <>
+                {sharedMedia.some((a) => a.kind === 'image') && (
+                  <div className="grid grid-cols-3 gap-2">
+                    {sharedMedia
+                      .filter((a) => a.kind === 'image')
+                      .map((att, i) => (
+                        <button
+                          key={`${att.storageKey}-${i}`}
+                          type="button"
+                          onClick={() => onOpenLightbox(att)}
+                          className="aspect-square rounded-xl overflow-hidden border border-slate-200 dark:border-white/10"
+                        >
+                          <img
+                            src={att.url}
+                            alt={att.originalName}
+                            referrerPolicy="no-referrer"
+                            className="w-full h-full object-cover"
+                          />
+                        </button>
+                      ))}
+                  </div>
+                )}
+
+                {sharedMedia.some((a) => a.kind === 'document') && (
+                  <div className="space-y-2">
+                    {sharedMedia
+                      .filter((a) => a.kind === 'document')
+                      .map((att, i) => (
+                        <div
+                          key={`${att.storageKey}-doc-${i}`}
+                          className="flex items-center gap-2.5 p-2.5 rounded-2xl border border-slate-200 dark:border-white/10 bg-slate-50/70 dark:bg-[#0B101B]"
+                        >
+                          <FileText className="w-4 h-4 text-indigo-500 shrink-0" />
+                          <div className="min-w-0 flex-1">
+                            <p className="text-xs font-semibold truncate">{att.originalName}</p>
+                            <p className="text-[10px] font-mono-tabular text-slate-400">
+                              {formatBytes(att.sizeBytes)}
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => onOpenLightbox(att)}
+                            aria-label={`Preview ${att.originalName}`}
+                            className="min-h-[34px] px-2.5 rounded-lg bg-white dark:bg-[#1A2438] border border-slate-200 dark:border-white/10 text-[11px] font-semibold inline-flex items-center gap-1 shrink-0 hover:bg-slate-100 dark:hover:bg-white/10"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                            <span>Preview</span>
+                          </button>
+                          <a
+                            href={att.url}
+                            download={att.originalName}
+                            aria-label={`Download ${att.originalName}`}
+                            className="min-h-[34px] min-w-[34px] rounded-lg inline-flex items-center justify-center text-slate-500 hover:bg-slate-200/70 dark:hover:bg-white/10 shrink-0"
+                          >
+                            <Download className="w-4 h-4" />
+                          </a>
+                        </div>
+                      ))}
+                  </div>
+                )}
+              </>
             )}
           </div>
         )}

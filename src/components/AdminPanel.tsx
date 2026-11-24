@@ -106,8 +106,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     message: string;
     actionLabel: string;
     isDestructive?: boolean;
-    onConfirm: () => Promise<void>;
+    reasonLabel?: string;
+    reasonDefault?: string;
+    onConfirm: (reason: string) => Promise<void>;
   } | null>(null);
+  const [confirmReason, setConfirmReason] = useState('');
 
   const fetchAdminData = async () => {
     if (!open || !currentUser.is_admin) return;
@@ -157,20 +160,21 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   const handleBanSuspendUser = async (userId: string, currentBanned: number) => {
     const nextBanned = currentBanned === 0;
     const defaultReason = nextBanned ? 'Violation of Zephyrix community guidelines & terms.' : '';
-    const reason = nextBanned ? window.prompt('Enter ban / suspension reason for user:', defaultReason) : '';
-    if (nextBanned && reason === null) return;
+    setConfirmReason(defaultReason);
 
     setConfirmModal({
       title: nextBanned ? 'Suspend / Ban User' : 'Unban User',
       message: nextBanned
-        ? `Are you sure you want to suspend this user? Reason: "${reason}"`
+        ? 'Are you sure you want to suspend this user? An automated notice will be sent.'
         : 'Are you sure you want to lift the ban on this user?',
       actionLabel: nextBanned ? 'Suspend User' : 'Unban',
       isDestructive: nextBanned,
-      onConfirm: async () => {
+      reasonLabel: nextBanned ? 'Ban / Suspension Reason' : undefined,
+      reasonDefault: defaultReason,
+      onConfirm: async (reason) => {
         await apiFetch(`/api/v1/admin/users/${userId}`, {
           method: 'PATCH',
-          body: JSON.stringify({ isBanned: nextBanned, banReason: reason || '' }),
+          body: JSON.stringify({ isBanned: nextBanned, banReason: reason.trim() }),
         });
         setFeedback(nextBanned ? 'User suspended with automated notice sent.' : 'User ban lifted.');
         await fetchAdminData();
@@ -194,20 +198,22 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
   const handleToggleChatBan = async (chatId: string, currentBanned: number) => {
     const nextBanned = currentBanned === 0;
-    const reason = nextBanned ? window.prompt('Enter group/channel ban reason:', 'Copyright or safety violation') : '';
-    if (nextBanned && reason === null) return;
+    const defaultReason = nextBanned ? 'Copyright or safety violation' : '';
+    setConfirmReason(defaultReason);
 
     setConfirmModal({
       title: nextBanned ? 'Ban Group or Channel' : 'Unban Group/Channel',
       message: nextBanned
-        ? `Are you sure you want to ban this conversation? All members will receive an automated suspension notice.`
+        ? 'Are you sure you want to ban this conversation? All members will receive an automated suspension notice.'
         : 'Lift ban on this conversation?',
       actionLabel: nextBanned ? 'Ban Conversation' : 'Unban',
       isDestructive: nextBanned,
-      onConfirm: async () => {
+      reasonLabel: nextBanned ? 'Conversation Ban Reason' : undefined,
+      reasonDefault: defaultReason,
+      onConfirm: async (reason) => {
         await apiFetch(`/api/v1/admin/chats/${chatId}/ban`, {
           method: 'PATCH',
-          body: JSON.stringify({ isBanned: nextBanned, banReason: reason || '' }),
+          body: JSON.stringify({ isBanned: nextBanned, banReason: reason.trim() }),
         });
         setFeedback('Conversation moderation updated.');
         await fetchAdminData();
@@ -967,6 +973,17 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             <p className="text-sm text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-[#0B101B] p-3 rounded-2xl border border-slate-200 dark:border-white/10">
               {confirmModal.message}
             </p>
+            {confirmModal.reasonLabel && (
+              <label className="block space-y-1.5">
+                <span className="text-xs font-semibold text-slate-400">{confirmModal.reasonLabel}</span>
+                <input
+                  type="text"
+                  value={confirmReason}
+                  onChange={(e) => setConfirmReason(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-100 dark:bg-[#0B101B] border border-slate-200 dark:border-white/10 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </label>
+            )}
             <div className="flex gap-2.5 pt-1">
               <button
                 type="button"
@@ -979,7 +996,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 type="button"
                 onClick={async () => {
                   try {
-                    await confirmModal.onConfirm();
+                    await confirmModal.onConfirm(confirmReason);
                     setConfirmModal(null);
                   } catch (err) {
                     setError(err instanceof ApiError ? err.message : 'Action failed');

@@ -23,6 +23,7 @@ import {
   getOfflineOutbox,
   removeOfflineMessage,
   setInMemoryToken,
+  wsUrl,
 } from './lib/api';
 import type {
   ActiveCallSession,
@@ -31,6 +32,8 @@ import type {
   IncomingCallInvite,
   Locale,
   MessageAttachment,
+  MessageReaction,
+  PendingDirectReply,
   SystemConfig,
   ThemeMode,
   UserProfile,
@@ -65,6 +68,7 @@ export default function App() {
 
   const [activeCall, setActiveCall] = useState<ActiveCallSession | null>(null);
   const [incomingCall, setIncomingCall] = useState<IncomingCallInvite | null>(null);
+  const [pendingDirectReply, setPendingDirectReply] = useState<PendingDirectReply | null>(null);
 
   const isOnline = useOnlineStatus();
   const activeChatIdRef = useRef<string | null>(null);
@@ -144,18 +148,22 @@ export default function App() {
     }
   }, [user, loadChats]);
 
-  // Real-Time Server-Sent Events (instant sync across direct, groups, channels, reactions & call invites)
+  // Real-Time WebSocket + Server-Sent Events (instant sync across direct, groups, channels, reactions & call invites)
   useEffect(() => {
     if (!user) return;
-    const es = new EventSource(apiUrl('/api/v1/events'), { withCredentials: true });
+    let closed = false;
+    let ws: WebSocket | null = null;
+    let reconnectTimer: number | null = null;
+    let reconnectDelay = 1000;
 
-    es.onmessage = (ev) => {
+    const handleLiveEvent = (rawData: string) => {
       try {
-        const evt = JSON.parse(ev.data) as {
+        const evt = JSON.parse(rawData) as {
           type: string;
           chatId?: string;
           message?: ChatMessage;
           messageId?: string;
+          reactions?: MessageReaction[];
           userId?: string;
           isTyping?: boolean;
           callId?: string;
@@ -184,6 +192,20 @@ export default function App() {
             ),
           }));
           void loadChats();
+        } else if (evt.type === 'message:reaction' && evt.chatId && evt.messageId && Array.isArray(evt.reactions)) {
+          const nextReactions = evt.reactions;
+          const targetChatId = evt.chatId;
+          const targetMessageId = evt.messageId;
+          setMessagesByChat((prev) => {
+            const list = prev[targetChatId];
+            if (!list) return prev;
+            return {
+              ...prev,
+              [targetChatId]: list.map((m) =>
+                m.id === targetMessageId ? { ...m, reactions: nextReactions } : m
+              ),
+            };
+          });
         } else if (evt.type === 'message:deleted' && evt.chatId && evt.messageId) {
           setMessagesByChat((prev) => ({
             ...prev,
@@ -226,7 +248,47 @@ export default function App() {
       }
     };
 
+    const connectWs = () => {
+      if (closed) return;
+      try {
+        const socket = new WebSocket(wsUrl('/api/v1/ws'));
+        ws = socket;
+        socket.onopen = () => {
+          reconnectDelay = 1000;
+        };
+        socket.onmessage = (ev) => {
+          if (typeof ev.data === 'string') {
+            handleLiveEvent(ev.data);
+          }
+        };
+        socket.onclose = () => {
+          if (closed) return;
+          reconnectTimer = window.setTimeout(() => {
+            reconnectDelay = Math.min(15000, reconnectDelay * 2);
+            connectWs();
+          }, reconnectDelay);
+        };
+        socket.onerror = () => {
+          socket.close();
+        };
+      } catch {
+        // SSE remains active as fallback
+      }
+    };
+
+    connectWs();
+
+    const es = new EventSource(apiUrl('/api/v1/events'), { withCredentials: true });
+    es.onmessage = (ev) => {
+      if (typeof ev.data === 'string') {
+        handleLiveEvent(ev.data);
+      }
+    };
+
     return () => {
+      closed = true;
+      if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
+      if (ws) ws.close();
       es.close();
     };
   }, [user?.id, loadChats]);
@@ -450,6 +512,36 @@ export default function App() {
     void loadChats();
   };
 
+  const handleReplyPrivately = useCallback(
+    async (msg: ChatMessage) => {
+      if (!msg.senderId || msg.senderId === user?.id || msg.isBot || String(msg.senderId).startsWith('bot_')) {
+        return;
+      }
+      try {
+        const res = await apiFetch<{ chat: ChatSummary }>('/api/v1/chats', {
+          method: 'POST',
+          body: JSON.stringify({ type: 'direct', targetUserId: msg.senderId }),
+        });
+        if (!res.chat?.id) return;
+        const previewBody =
+          msg.body?.trim() ||
+          msg.attachments?.[0]?.originalName ||
+          (msg.attachments?.[0]?.kind ? `${msg.attachments[0].kind} attachment` : 'Attachment');
+        const quoteText = `${msg.senderName}: ${previewBody}`.slice(0, 380);
+        setPendingDirectReply({
+          chatId: res.chat.id,
+          senderName: msg.senderName,
+          previewBody,
+          quoteText,
+        });
+        await loadChats(res.chat.id);
+      } catch {
+        // ignore if user cannot be messaged
+      }
+    },
+    [loadChats, user?.id]
+  );
+
   const handleUpdateChatPref = useCallback(
     async (chat: ChatSummary, patch: { pinned?: boolean; muted?: boolean; archived?: boolean }) => {
       const now = new Date().toISOString();
@@ -591,6 +683,10 @@ export default function App() {
           onMessageUpdated={handleMessageUpdated}
           onMessageDeleted={handleMessageDeleted}
           onOpenLightbox={(att) => setLightboxAtt(att)}
+          pendingDirectReply={pendingDirectReply}
+          onClearPendingDirectReply={() => setPendingDirectReply(null)}
+          onReplyPrivately={(msg) => void handleReplyPrivately(msg)}
+          onRefreshChats={() => void loadChats()}
         />
 
         {infoOpen && activeChat && (

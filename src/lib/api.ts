@@ -17,6 +17,16 @@ export function getInMemoryToken(): string | null {
   return inMemoryToken;
 }
 
+export function wsUrl(path: string): string {
+  const base = API_BASE || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000');
+  const parsed = new URL(path, base);
+  parsed.protocol = parsed.protocol === 'https:' ? 'wss:' : 'ws:';
+  if (inMemoryToken && !parsed.searchParams.has('token')) {
+    parsed.searchParams.set('token', inMemoryToken);
+  }
+  return parsed.toString();
+}
+
 export class ApiError extends Error {
   status: number;
   code: string;

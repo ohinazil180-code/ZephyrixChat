@@ -24,11 +24,47 @@ const ALLOWED_MIME_EXTENSIONS: Record<string, string> = {
   'audio/wav': '.wav',
   'application/pdf': '.pdf',
   'text/plain': '.txt',
+  'text/markdown': '.md',
+  'text/x-markdown': '.md',
+  'application/json': '.json',
+  'text/csv': '.csv',
   'application/zip': '.zip',
   'application/x-zip-compressed': '.zip',
   'application/msword': '.doc',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
 };
+
+const EXT_TO_CANONICAL_MIME: Record<string, string> = {
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.mov': 'video/quicktime',
+  '.ogg': 'audio/ogg',
+  '.m4a': 'audio/mp4',
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.pdf': 'application/pdf',
+  '.txt': 'text/plain',
+  '.log': 'text/plain',
+  '.md': 'text/markdown',
+  '.json': 'application/json',
+  '.csv': 'text/csv',
+  '.zip': 'application/zip',
+  '.doc': 'application/msword',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+};
+
+const INLINE_PREVIEWABLE_DOC_MIMES = new Set([
+  'application/pdf',
+  'text/plain',
+  'text/markdown',
+  'application/json',
+  'text/csv',
+]);
 
 const SAFE_FILENAME_RE = /^[a-f0-9-]{36}\.[a-z0-9]{1,8}$/i;
 
@@ -47,12 +83,23 @@ function classifyMediaKind(mimeType: string, requestedKind?: string): 'image' | 
   return 'document';
 }
 
-function getSafeExtension(mimeType: string, originalName: string): string {
-  const fromMime = ALLOWED_MIME_EXTENSIONS[mimeType];
-  if (fromMime) return fromMime;
-  const ext = path.extname(originalName).toLowerCase().replace(/[^a-z0-9.]/g, '');
-  if (ext && ext.length <= 8) return ext;
-  return '.bin';
+function resolveUploadMimeAndExt(rawMime: string, originalName: string): { mimeType: string; ext: string } | null {
+  const originalExt = path.extname(originalName || '').toLowerCase();
+  // Normalize browsers that report .md, .log, .csv, or .json as application/octet-stream
+  if (
+    (rawMime === 'application/octet-stream' || !rawMime) &&
+    ['.md', '.txt', '.log', '.json', '.csv'].includes(originalExt)
+  ) {
+    return {
+      mimeType: EXT_TO_CANONICAL_MIME[originalExt] || 'text/plain',
+      ext: originalExt === '.log' ? '.txt' : originalExt,
+    };
+  }
+
+  const mappedExt = ALLOWED_MIME_EXTENSIONS[rawMime];
+  if (!mappedExt) return null;
+  const canonicalMime = rawMime === 'text/x-markdown' ? 'text/markdown' : rawMime;
+  return { mimeType: canonicalMime, ext: mappedExt };
 }
 
 const uploadMiddleware = multer({
@@ -84,13 +131,14 @@ export function registerMediaRoutes(app: Express): void {
       }
 
       const rawMime = (file.mimetype || 'application/octet-stream').split(';')[0].trim().toLowerCase();
-      if (!ALLOWED_MIME_EXTENSIONS[rawMime]) {
+      const resolved = resolveUploadMimeAndExt(rawMime, file.originalname || 'file');
+      if (!resolved) {
         sendApiError(res, 415, 'UNSUPPORTED_MEDIA_TYPE', `File type "${rawMime}" is not supported.`);
         return;
       }
 
       try {
-        const ext = getSafeExtension(rawMime, file.originalname || 'file');
+        const { mimeType, ext } = resolved;
         const safeName = `${crypto.randomUUID()}${ext}`;
         const destPath = path.resolve(uploadsRoot, safeName);
         if (!destPath.startsWith(uploadsRoot + path.sep)) {
@@ -103,7 +151,7 @@ export function registerMediaRoutes(app: Express): void {
         const durationRaw = Number((req.body as { durationMs?: string | number })?.durationMs || 0);
         const durationMs = Number.isFinite(durationRaw) && durationRaw >= 0 ? Math.min(durationRaw, 3_600_000) : 0;
         const requestedKind = (req.body as { kind?: string })?.kind;
-        const kind = classifyMediaKind(rawMime, requestedKind);
+        const kind = classifyMediaKind(mimeType, requestedKind);
         const url = `/api/v1/media/file/${safeName}`;
 
         res.status(201).json({
@@ -111,7 +159,7 @@ export function registerMediaRoutes(app: Express): void {
             storageKey: safeName,
             url,
             originalName: path.basename(file.originalname || `file${ext}`).slice(0, 180),
-            mimeType: rawMime,
+            mimeType,
             kind,
             sizeBytes: file.size,
             durationMs,
@@ -144,14 +192,29 @@ export function registerMediaRoutes(app: Express): void {
     }
 
     const ext = path.extname(filename).toLowerCase();
-    const matchedMime =
-      Object.entries(ALLOWED_MIME_EXTENSIONS).find(([, e]) => e === ext)?.[0] || 'application/octet-stream';
+    const matchedMime = EXT_TO_CANONICAL_MIME[ext] || 'application/octet-stream';
+    const wantsInline = req.query.inline === '1' || req.query.inline === 'true';
 
     res.setHeader('Content-Type', matchedMime);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-    if (!matchedMime.startsWith('image/') && !matchedMime.startsWith('video/') && !matchedMime.startsWith('audio/')) {
-      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+
+    const isMediaStream =
+      matchedMime.startsWith('image/') ||
+      matchedMime.startsWith('video/') ||
+      matchedMime.startsWith('audio/');
+
+    if (!isMediaStream) {
+      if (wantsInline && INLINE_PREVIEWABLE_DOC_MIMES.has(matchedMime)) {
+        res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+        if (matchedMime !== 'application/pdf') {
+          res.setHeader('Content-Security-Policy', "sandbox; default-src 'none'");
+        }
+      } else {
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      }
     }
+
     res.sendFile(resolvedPath);
   });
 }

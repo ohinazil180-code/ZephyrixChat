@@ -54,10 +54,16 @@ export interface MessageAttachment {
   checksum?: string;
 }
 
+export interface ReactionUser {
+  id: string;
+  displayName: string;
+}
+
 export interface MessageReaction {
   emoji: string;
   count: number;
   reactedByMe: boolean;
+  users?: ReactionUser[];
 }
 
 export interface MessageReplyPreview {
@@ -65,6 +71,15 @@ export interface MessageReplyPreview {
   senderName: string;
   body: string;
   deletedAt: string | null;
+  attachmentName?: string | null;
+  attachmentKind?: 'image' | 'video' | 'voice' | 'document' | null;
+}
+
+export interface PendingDirectReply {
+  chatId: string;
+  quoteText: string;
+  senderName: string;
+  previewBody: string;
 }
 
 export interface ChatMessage {

@@ -78,6 +78,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   const avatarInputRef = useRef<HTMLInputElement | null>(null);
+  const [banPromptModal, setBanPromptModal] = useState<{
+    kind: 'user' | 'chat';
+    id: string;
+    reason: string;
+  } | null>(null);
 
   const handleToggleUserAdmin = async (targetId: string, currentAdmin: number) => {
     try {
@@ -93,16 +98,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   };
 
   const handleToggleUserBan = async (targetId: string, currentBanned: number) => {
-    let reason = '';
     if (currentBanned === 0) {
-      const promptRes = window.prompt(t.banReasonPrompt, 'Violation of community standards');
-      if (promptRes === null) return;
-      reason = promptRes.trim();
+      setBanPromptModal({
+        kind: 'user',
+        id: targetId,
+        reason: 'Violation of community standards',
+      });
+      return;
     }
     try {
       await apiFetch(`/api/v1/admin/users/${targetId}`, {
         method: 'PATCH',
-        body: JSON.stringify({ isBanned: currentBanned === 0, banReason: reason }),
+        body: JSON.stringify({ isBanned: false, banReason: '' }),
       });
       const res = await apiFetch<{ users: typeof adminUsers }>('/api/v1/admin/users');
       setAdminUsers(res.users);
@@ -112,21 +119,49 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   };
 
   const handleToggleChatBan = async (chatId: string, currentBanned: number) => {
-    let reason = '';
     if (currentBanned === 0) {
-      const promptRes = window.prompt(t.banReasonPrompt, 'Group/Channel guidelines violation');
-      if (promptRes === null) return;
-      reason = promptRes.trim();
+      setBanPromptModal({
+        kind: 'chat',
+        id: chatId,
+        reason: 'Group/Channel guidelines violation',
+      });
+      return;
     }
     try {
       await apiFetch(`/api/v1/admin/chats/${chatId}/ban`, {
         method: 'PATCH',
-        body: JSON.stringify({ isBanned: currentBanned === 0, banReason: reason }),
+        body: JSON.stringify({ isBanned: false, banReason: '' }),
       });
       const res = await apiFetch<{ chats: typeof adminChats }>('/api/v1/admin/chats');
       setAdminChats(res.chats);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Action failed');
+    }
+  };
+
+  const handleConfirmBanPrompt = async () => {
+    if (!banPromptModal) return;
+    const reason = banPromptModal.reason.trim();
+    try {
+      if (banPromptModal.kind === 'user') {
+        await apiFetch(`/api/v1/admin/users/${banPromptModal.id}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ isBanned: true, banReason: reason }),
+        });
+        const res = await apiFetch<{ users: typeof adminUsers }>('/api/v1/admin/users');
+        setAdminUsers(res.users);
+      } else {
+        await apiFetch(`/api/v1/admin/chats/${banPromptModal.id}/ban`, {
+          method: 'PATCH',
+          body: JSON.stringify({ isBanned: true, banReason: reason }),
+        });
+        const res = await apiFetch<{ chats: typeof adminChats }>('/api/v1/admin/chats');
+        setAdminChats(res.chats);
+      }
+      setBanPromptModal(null);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Action failed');
+      setBanPromptModal(null);
     }
   };
 
@@ -766,6 +801,36 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </div>
         </div>
       </div>
+
+      {banPromptModal && (
+        <div className="fixed inset-0 z-60 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-sm rounded-3xl border border-slate-200 dark:border-white/15 bg-white dark:bg-[#162035] p-5 space-y-4 shadow-2xl">
+            <h3 className="font-display text-sm font-bold">{t.banReasonPrompt}</h3>
+            <input
+              type="text"
+              value={banPromptModal.reason}
+              onChange={(e) => setBanPromptModal((prev) => (prev ? { ...prev, reason: e.target.value } : null))}
+              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-100 dark:bg-[#0B101B] border border-slate-200 dark:border-white/10 text-xs focus:outline-none focus:ring-2 focus:ring-rose-500"
+            />
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setBanPromptModal(null)}
+                className="flex-1 min-h-[40px] rounded-xl border border-slate-200 dark:border-white/15 text-xs font-semibold"
+              >
+                {t.cancel}
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleConfirmBanPrompt()}
+                className="flex-1 min-h-[40px] rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold"
+              >
+                {t.banUser}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -6,6 +6,7 @@ import { dbAll, dbGet, dbRun, getDatabaseStatus, nowIso, withTx } from './db.ts'
 import {
   addEventStream,
   isUserConnectedSse,
+  publishReactionToChat,
   publishToChat,
   publishToUsers,
   removeEventStream,
@@ -56,32 +57,45 @@ function hydrateMessages(rows: Record<string, unknown>[], viewerId?: string) {
     attsByMsg.set(mid, list);
   }
 
-  const reactRows = dbAll<{ message_id: string; emoji: string; user_id: string }>(
-    `SELECT message_id, emoji, user_id FROM reactions WHERE message_id IN (${placeholders})`,
+  const reactRows = dbAll<{ message_id: string; emoji: string; user_id: string; display_name: string }>(
+    `SELECT r.message_id, r.emoji, r.user_id, u.display_name
+     FROM reactions r
+     JOIN users u ON u.id = r.user_id
+     WHERE r.message_id IN (${placeholders})
+     ORDER BY r.created_at ASC`,
     msgIds
   );
-  const reactionsByMsg = new Map<string, Array<{ emoji: string; count: number; reactedByMe: boolean }>>();
-  const tmpReact = new Map<string, Map<string, Set<string>>>();
+  const reactionsByMsg = new Map<
+    string,
+    Array<{
+      emoji: string;
+      count: number;
+      reactedByMe: boolean;
+      users: Array<{ id: string; displayName: string }>;
+    }>
+  >();
+  const tmpReact = new Map<string, Map<string, Map<string, string>>>();
   for (const r of reactRows) {
     let byEmoji = tmpReact.get(r.message_id);
     if (!byEmoji) {
       byEmoji = new Map();
       tmpReact.set(r.message_id, byEmoji);
     }
-    let users = byEmoji.get(r.emoji);
-    if (!users) {
-      users = new Set();
-      byEmoji.set(r.emoji, users);
+    let usersMap = byEmoji.get(r.emoji);
+    if (!usersMap) {
+      usersMap = new Map();
+      byEmoji.set(r.emoji, usersMap);
     }
-    users.add(r.user_id);
+    usersMap.set(String(r.user_id), String(r.display_name || 'User'));
   }
   for (const [mid, byEmoji] of tmpReact.entries()) {
     reactionsByMsg.set(
       mid,
-      Array.from(byEmoji.entries()).map(([emoji, users]) => ({
+      Array.from(byEmoji.entries()).map(([emoji, usersMap]) => ({
         emoji,
-        count: users.size,
-        reactedByMe: viewerId ? users.has(viewerId) : false,
+        count: usersMap.size,
+        reactedByMe: viewerId ? usersMap.has(viewerId) : false,
+        users: Array.from(usersMap.entries()).map(([id, displayName]) => ({ id, displayName })),
       }))
     );
   }
@@ -99,7 +113,17 @@ function hydrateMessages(rows: Record<string, unknown>[], viewerId?: string) {
 
   // Reply previews
   const replyIds = Array.from(new Set(rows.map((r) => (r.reply_to_id ? String(r.reply_to_id) : null)).filter(Boolean) as string[]));
-  const replyMap = new Map<string, { id: string; senderName: string; body: string; deletedAt: string | null }>();
+  const replyMap = new Map<
+    string,
+    {
+      id: string;
+      senderName: string;
+      body: string;
+      deletedAt: string | null;
+      attachmentName: string | null;
+      attachmentKind: 'image' | 'video' | 'voice' | 'document' | null;
+    }
+  >();
   if (replyIds.length > 0) {
     const replyPlaceholders = replyIds.map(() => '?').join(', ');
     const rRows = dbAll<Record<string, unknown>>(
@@ -109,12 +133,34 @@ function hydrateMessages(rows: Record<string, unknown>[], viewerId?: string) {
        WHERE m.id IN (${replyPlaceholders})`,
       replyIds
     );
+    const replyAttRows = dbAll<Record<string, unknown>>(
+      `SELECT message_id, original_name, kind
+       FROM attachments
+       WHERE message_id IN (${replyPlaceholders})
+       ORDER BY created_at ASC`,
+      replyIds
+    );
+    const firstAttByReply = new Map<string, { originalName: string; kind: 'image' | 'video' | 'voice' | 'document' }>();
+    for (const ar of replyAttRows) {
+      const mid = String(ar.message_id);
+      if (!firstAttByReply.has(mid)) {
+        firstAttByReply.set(mid, {
+          originalName: String(ar.original_name || ''),
+          kind: String(ar.kind) as 'image' | 'video' | 'voice' | 'document',
+        });
+      }
+    }
     for (const rr of rRows) {
-      replyMap.set(String(rr.id), {
-        id: String(rr.id),
+      const rid = String(rr.id);
+      const isDeleted = Boolean(rr.deleted_at);
+      const firstAtt = isDeleted ? undefined : firstAttByReply.get(rid);
+      replyMap.set(rid, {
+        id: rid,
         senderName: String(rr.sender_name || ''),
-        body: rr.deleted_at ? '' : String(rr.body || ''),
+        body: isDeleted ? '' : String(rr.body || ''),
         deletedAt: rr.deleted_at ? String(rr.deleted_at) : null,
+        attachmentName: firstAtt?.originalName || null,
+        attachmentKind: firstAtt?.kind || null,
       });
     }
   }
@@ -162,9 +208,11 @@ function getChatSummariesForUser(userId: string) {
   const chats = dbAll<Record<string, unknown>>(
     `SELECT c.id, c.type, c.title, c.description, c.avatar_url, c.invite_code, c.zego_room_id, c.assigned_bot_id,
             c.created_by, c.created_at,
+            b.name AS assigned_bot_name, b.is_verified AS assigned_bot_verified,
             cm.role AS my_role, cm.pinned_at, cm.archived_at, cm.muted_until, cm.last_read_at
      FROM chats c
      JOIN chat_members cm ON cm.chat_id = c.id
+     LEFT JOIN bots b ON b.id = c.assigned_bot_id
      WHERE cm.user_id = ?
        AND cm.left_at IS NULL
        AND c.deleted_at IS NULL
@@ -303,8 +351,14 @@ function getChatSummariesForUser(userId: string) {
       unreadCount: Number(unreadRow?.cnt || 0),
       lastMessage: hydratedLast,
       assignedBotId: chat.assigned_bot_id ? String(chat.assigned_bot_id) : (type === 'ai' ? 'bot_zephyrix_ai' : null),
-      assignedBotName: type === 'ai' ? 'Zephyrix AI Assistant' : null,
-      isBotVerified: type === 'ai' ? true : false,
+      assignedBotName: chat.assigned_bot_name
+        ? String(chat.assigned_bot_name)
+        : type === 'ai'
+          ? 'Zephyrix AI Assistant'
+          : null,
+      isBotVerified: chat.assigned_bot_id
+        ? Boolean(chat.assigned_bot_verified)
+        : type === 'ai',
     });
   }
 
@@ -1024,12 +1078,28 @@ export function registerApiRoutes(app: Express): void {
     const chatId = String(req.params.id);
     const userId = req.authUser!.id;
 
-    const chat = dbGet<{ id: string; type: string }>(
-      `SELECT id, type FROM chats WHERE id = ? AND deleted_at IS NULL`,
+    const chat = dbGet<{
+      id: string;
+      type: string;
+      assigned_bot_id: string | null;
+      is_banned: number;
+      ban_reason: string;
+    }>(
+      `SELECT id, type, assigned_bot_id, is_banned, ban_reason FROM chats WHERE id = ? AND deleted_at IS NULL`,
       [chatId]
     );
     if (!chat) {
       sendApiError(res, 404, 'CHAT_NOT_FOUND', 'Conversation not found.');
+      return;
+    }
+
+    if (Boolean(chat.is_banned)) {
+      sendApiError(
+        res,
+        403,
+        'CHAT_BANNED',
+        chat.ban_reason || 'This conversation has been suspended by an administrator.'
+      );
       return;
     }
 
@@ -1249,16 +1319,24 @@ export function registerApiRoutes(app: Express): void {
     res.json({ message: hydrated });
   });
 
+  const reactionBodySchema = z.object({
+    emoji: z.string().trim().min(1, 'Reaction emoji is required.').max(16, 'Emoji is too long.'),
+  });
+
   app.post('/api/v1/messages/:id/reactions', requireAuth, (req: AuthRequest, res) => {
     const msgId = String(req.params.id);
-    const emoji = String((req.body as { emoji?: string })?.emoji || '').trim();
-    if (!emoji || emoji.length > 16) {
-      sendApiError(res, 400, 'INVALID_EMOJI', 'Valid reaction emoji required.');
+    const parsed = reactionBodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      sendApiError(res, 400, 'INVALID_EMOJI', parsed.error.issues[0]?.message || 'Valid reaction emoji required.');
       return;
     }
+    const emoji = parsed.data.emoji;
 
-    const msg = dbGet<{ id: string; chat_id: string }>(`SELECT id, chat_id FROM messages WHERE id = ?`, [msgId]);
-    if (!msg) {
+    const msg = dbGet<{ id: string; chat_id: string; deleted_at: string | null }>(
+      `SELECT id, chat_id, deleted_at FROM messages WHERE id = ?`,
+      [msgId]
+    );
+    if (!msg || msg.deleted_at) {
       sendApiError(res, 404, 'MESSAGE_NOT_FOUND', 'Message not found.');
       return;
     }
@@ -1273,7 +1351,9 @@ export function registerApiRoutes(app: Express): void {
       `SELECT emoji FROM reactions WHERE message_id = ? AND user_id = ? AND emoji = ?`,
       [msgId, req.authUser!.id, emoji]
     );
+    let action: 'added' | 'removed' = 'added';
     if (existing) {
+      action = 'removed';
       dbRun(`DELETE FROM reactions WHERE message_id = ? AND user_id = ? AND emoji = ?`, [
         msgId,
         req.authUser!.id,
@@ -1288,6 +1368,43 @@ export function registerApiRoutes(app: Express): void {
       ]);
     }
 
+    const reactRows = dbAll<{ emoji: string; user_id: string; display_name: string }>(
+      `SELECT r.emoji, r.user_id, u.display_name
+       FROM reactions r
+       JOIN users u ON u.id = r.user_id
+       WHERE r.message_id = ?
+       ORDER BY r.created_at ASC`,
+      [msgId]
+    );
+    const groupedMap = new Map<string, { userIds: Set<string>; users: Array<{ id: string; displayName: string }> }>();
+    for (const r of reactRows) {
+      let entry = groupedMap.get(r.emoji);
+      if (!entry) {
+        entry = { userIds: new Set(), users: [] };
+        groupedMap.set(r.emoji, entry);
+      }
+      const uid = String(r.user_id);
+      if (!entry.userIds.has(uid)) {
+        entry.userIds.add(uid);
+        entry.users.push({ id: uid, displayName: String(r.display_name || 'User') });
+      }
+    }
+    const groupedReactions = Array.from(groupedMap.entries()).map(([em, entry]) => ({
+      emoji: em,
+      count: entry.userIds.size,
+      userIds: entry.userIds,
+      users: entry.users,
+    }));
+
+    publishReactionToChat(msg.chat_id, msgId, req.authUser!.id, emoji, action, groupedReactions);
+
+    const viewerReactions = groupedReactions.map((g) => ({
+      emoji: g.emoji,
+      count: g.count,
+      reactedByMe: g.userIds.has(req.authUser!.id),
+      users: g.users,
+    }));
+
     const row = dbGet<Record<string, unknown>>(
       `SELECT m.*, u.display_name AS sender_name, u.username AS sender_username,
               u.avatar_url AS sender_avatar, u.verified_flag AS sender_verified, u.developer_badge AS sender_developer_badge
@@ -1295,10 +1412,225 @@ export function registerApiRoutes(app: Express): void {
       [msgId]
     );
     const hydrated = row ? hydrateMessages([row], req.authUser!.id)[0] : null;
-    if (hydrated) {
-      publishToChat(msg.chat_id, { type: 'message:updated', chatId: msg.chat_id, message: hydrated });
+    res.json({
+      ok: true,
+      chatId: msg.chat_id,
+      messageId: msgId,
+      emoji,
+      action,
+      reactions: viewerReactions,
+      message: hydrated,
+    });
+  });
+
+  const forwardMessageSchema = z.object({
+    targetChatIds: z.array(z.string().min(1)).max(20).optional().default([]),
+    targetUserIds: z.array(z.string().min(1)).max(20).optional().default([]),
+  });
+
+  app.post('/api/v1/messages/:id/forward', requireAuth, (req: AuthRequest, res) => {
+    const msgId = String(req.params.id);
+    const userId = req.authUser!.id;
+    const parsed = forwardMessageSchema.safeParse(req.body);
+    if (!parsed.success) {
+      sendApiError(res, 400, 'INVALID_INPUT', parsed.error.issues[0]?.message || 'Invalid forward recipients.');
+      return;
     }
-    res.json({ message: hydrated });
+
+    const uniqueTargetChats = Array.from(new Set(parsed.data.targetChatIds));
+    const uniqueTargetUsers = Array.from(new Set(parsed.data.targetUserIds.filter((uid) => uid !== userId)));
+    if (uniqueTargetChats.length + uniqueTargetUsers.length === 0) {
+      sendApiError(res, 400, 'NO_RECIPIENTS', 'Select at least one recipient to forward this message.');
+      return;
+    }
+    if (uniqueTargetChats.length + uniqueTargetUsers.length > 20) {
+      sendApiError(res, 400, 'TOO_MANY_RECIPIENTS', 'You can forward to at most 20 recipients at once.');
+      return;
+    }
+
+    const sourceMsg = dbGet<Record<string, unknown>>(
+      `SELECT m.id, m.chat_id, m.sender_id, m.body, m.forwarded_from, m.deleted_at, u.display_name AS sender_name
+       FROM messages m
+       JOIN users u ON u.id = m.sender_id
+       WHERE m.id = ?`,
+      [msgId]
+    );
+    if (!sourceMsg || sourceMsg.deleted_at) {
+      sendApiError(res, 404, 'MESSAGE_NOT_FOUND', 'Message not found.');
+      return;
+    }
+
+    const sourceMembership = getMembership(String(sourceMsg.chat_id), userId);
+    if (!sourceMembership || sourceMembership.left_at) {
+      sendApiError(res, 403, 'FORBIDDEN', 'You do not have access to this message.');
+      return;
+    }
+
+    const sourceAttachments = dbAll<Record<string, unknown>>(
+      `SELECT storage_key, url, original_name, mime_type, kind, size_bytes, duration_ms, checksum
+       FROM attachments WHERE message_id = ?`,
+      [msgId]
+    );
+
+    const forwardBody = String(sourceMsg.body || '').trim();
+    if (!forwardBody && sourceAttachments.length === 0) {
+      sendApiError(res, 400, 'EMPTY_MESSAGE', 'Nothing to forward.');
+      return;
+    }
+
+    const forwardedFromLabel = sourceMsg.forwarded_from
+      ? String(sourceMsg.forwarded_from)
+      : String(sourceMsg.sender_name || '');
+
+    const now = nowIso();
+    const resolvedChatIds = new Set<string>(uniqueTargetChats);
+    const newlyCreatedUsers: Array<{ chatId: string; userId: string }> = [];
+
+    for (const targetUserId of uniqueTargetUsers) {
+      const targetUser = dbGet<{ id: string }>(
+        `SELECT id FROM users WHERE id = ? AND deleted_at IS NULL`,
+        [targetUserId]
+      );
+      if (!targetUser) continue;
+
+      const blocked = dbGet<{ blocker_id: string }>(
+        `SELECT blocker_id FROM blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)`,
+        [userId, targetUserId, targetUserId, userId]
+      );
+      if (blocked) continue;
+
+      const existingDm = dbGet<{ id: string }>(
+        `SELECT c.id FROM chats c
+         JOIN chat_members m1 ON m1.chat_id = c.id AND m1.user_id = ? AND m1.left_at IS NULL
+         JOIN chat_members m2 ON m2.chat_id = c.id AND m2.user_id = ? AND m2.left_at IS NULL
+         WHERE c.type = 'direct' AND c.deleted_at IS NULL
+         LIMIT 1`,
+        [userId, targetUserId]
+      );
+      if (existingDm) {
+        resolvedChatIds.add(existingDm.id);
+      } else {
+        const newDmId = crypto.randomUUID();
+        const pairIds = [userId, targetUserId].sort();
+        const zegoRoomId = `dm_${pairIds[0].slice(0, 8)}_${pairIds[1].slice(0, 8)}`;
+        withTx(() => {
+          dbRun(
+            `INSERT INTO chats (id, type, title, zego_room_id, created_by, created_at)
+             VALUES (?, 'direct', '', ?, ?, ?)`,
+            [newDmId, zegoRoomId, userId, now]
+          );
+          dbRun(`INSERT INTO chat_members (chat_id, user_id, role, joined_at) VALUES (?, ?, 'member', ?)`, [
+            newDmId,
+            userId,
+            now,
+          ]);
+          dbRun(`INSERT INTO chat_members (chat_id, user_id, role, joined_at) VALUES (?, ?, 'member', ?)`, [
+            newDmId,
+            targetUserId,
+            now,
+          ]);
+        });
+        resolvedChatIds.add(newDmId);
+        newlyCreatedUsers.push({ chatId: newDmId, userId: targetUserId });
+      }
+    }
+
+    const forwardedMessageIds: Array<{ chatId: string; messageId: string }> = [];
+
+    withTx(() => {
+      for (const destChatId of resolvedChatIds) {
+        const destChat = dbGet<{ id: string; type: string }>(
+          `SELECT id, type FROM chats WHERE id = ? AND deleted_at IS NULL`,
+          [destChatId]
+        );
+        if (!destChat) continue;
+
+        const destMembership = getMembership(destChatId, userId);
+        if (!destMembership || destMembership.left_at) continue;
+
+        if (destChat.type === 'channel' && destMembership.role !== 'owner' && destMembership.role !== 'admin') {
+          continue;
+        }
+
+        if (destChat.type === 'direct') {
+          const peer = dbGet<{ user_id: string }>(
+            `SELECT user_id FROM chat_members WHERE chat_id = ? AND user_id != ? AND left_at IS NULL`,
+            [destChatId, userId]
+          );
+          if (peer) {
+            const blocked = dbGet<{ blocker_id: string }>(
+              `SELECT blocker_id FROM blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)`,
+              [userId, peer.user_id, peer.user_id, userId]
+            );
+            if (blocked) continue;
+          }
+        }
+
+        const newMessageId = crypto.randomUUID();
+        dbRun(
+          `INSERT INTO messages (id, client_id, chat_id, sender_id, forwarded_from, body, is_silent, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, 0, ?)`,
+          [newMessageId, null, destChatId, userId, forwardedFromLabel, forwardBody, now]
+        );
+
+        for (const att of sourceAttachments) {
+          dbRun(
+            `INSERT INTO attachments (id, message_id, storage_key, url, original_name, mime_type, kind, size_bytes, duration_ms, checksum, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              crypto.randomUUID(),
+              newMessageId,
+              String(att.storage_key),
+              String(att.url),
+              String(att.original_name),
+              String(att.mime_type),
+              String(att.kind),
+              Number(att.size_bytes || 0),
+              Number(att.duration_ms || 0),
+              String(att.checksum || ''),
+              now,
+            ]
+          );
+        }
+
+        dbRun(`UPDATE chat_members SET last_read_at = ? WHERE chat_id = ? AND user_id = ?`, [now, destChatId, userId]);
+        forwardedMessageIds.push({ chatId: destChatId, messageId: newMessageId });
+      }
+    });
+
+    if (forwardedMessageIds.length === 0) {
+      sendApiError(res, 403, 'FORWARD_FAILED', 'Unable to forward to any of the selected recipients.');
+      return;
+    }
+
+    for (const item of newlyCreatedUsers) {
+      publishToUsers([item.userId], { type: 'chat:updated', chatId: item.chatId });
+    }
+
+    const hydratedMessages: Record<string, unknown>[] = [];
+    for (const item of forwardedMessageIds) {
+      const row = dbGet<Record<string, unknown>>(
+        `SELECT m.*, u.display_name AS sender_name, u.username AS sender_username,
+                u.avatar_url AS sender_avatar, u.verified_flag AS sender_verified, u.developer_badge AS sender_developer_badge
+         FROM messages m
+         JOIN users u ON u.id = m.sender_id
+         WHERE m.id = ?`,
+        [item.messageId]
+      );
+      const hydrated = row ? hydrateMessages([row], userId)[0] : null;
+      if (hydrated) {
+        hydratedMessages.push(hydrated);
+        publishToChat(item.chatId, { type: 'message:new', chatId: item.chatId, message: hydrated }, userId);
+      }
+      publishToChat(item.chatId, { type: 'chat:updated', chatId: item.chatId });
+    }
+
+    res.status(201).json({
+      ok: true,
+      forwardedCount: forwardedMessageIds.length,
+      chatIds: forwardedMessageIds.map((f) => f.chatId),
+      messages: hydratedMessages,
+    });
   });
 
   // ZEGOCLOUD Token04 Minting (Server Secret stays strictly on backend)
@@ -1397,7 +1729,7 @@ export function registerApiRoutes(app: Express): void {
     botId: string,
     userPrompt: string,
     attachmentUrl?: string
-  ): Promise<ChatMessage | null> {
+  ): Promise<Record<string, unknown> | null> {
     const bot = dbGet<Record<string, unknown>>(`SELECT * FROM bots WHERE id = ?`, [botId]) || {
       id: 'bot_zephyrix_ai',
       name: 'Zephyrix AI Assistant',
@@ -1665,6 +1997,23 @@ export function registerApiRoutes(app: Express): void {
       params.push(targetId);
       dbRun(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, params);
 
+      if (typeof body.isAdmin === 'boolean') {
+        recordAuditLog(
+          req.authUser!.id,
+          body.isAdmin ? 'GRANT_ADMIN' : 'REVOKE_ADMIN',
+          targetId,
+          `Target user: ${targetUser.display_name}`
+        );
+      }
+      if (typeof body.isBanned === 'boolean') {
+        recordAuditLog(
+          req.authUser!.id,
+          body.isBanned ? 'BAN_USER' : 'UNBAN_USER',
+          targetId,
+          body.isBanned ? String(body.banReason || 'Account suspended by administrator.') : `Ban lifted for ${targetUser.display_name}`
+        );
+      }
+
       if (body.isBanned) {
         const savedChat = dbGet<{ id: string }>(`SELECT id FROM chats WHERE type = 'saved' AND created_by = ? LIMIT 1`, [targetId]);
         if (savedChat) {
@@ -1711,6 +2060,12 @@ export function registerApiRoutes(app: Express): void {
     const banReason = String(body.banReason || 'Group or channel banned by administrator.');
 
     dbRun(`UPDATE chats SET is_banned = ?, ban_reason = ? WHERE id = ?`, [isBanned ? 1 : 0, isBanned ? banReason : '', chatId]);
+    recordAuditLog(
+      req.authUser!.id,
+      isBanned ? 'BAN_CHAT' : 'UNBAN_CHAT',
+      chatId,
+      isBanned ? banReason : 'Chat ban lifted'
+    );
 
     if (isBanned) {
       const noticeText = `Administrator Notice: This channel/group has been banned. Reason: ${banReason}`;
