@@ -1,0 +1,45 @@
+2026-11-25T03:25:14.35541284Z ==> Cloning from https://github.com/ohinazil180-code/ZephyrixChat
+2026-11-25T03:25:15.279497325Z ==> Checking out commit fccabf1ba967131d47af3bd0a387438e194848a0 in branch main
+2026-11-25T03:25:16.31612227Z ==> Using Node.js version 22.23.5 via environment variable NODE_VERSION
+2026-11-25T03:25:16.316129423Z ==> Docs on specifying a Node.js version: https://render.com/docs/node-version
+2026-11-25T03:25:16.316264196Z ==> Installing Node.js version 22.23.5...
+2026-11-25T03:25:17.293342634Z ==> Using Bun version 1.4.5 (default)
+2026-11-25T03:25:17.293346186Z ==> Docs on specifying a Bun version: https://render.com/docs/bun-version
+2026-11-25T03:25:17.31906258Z ==> Running build command 'npm install && npm run build'...
+2026-11-25T03:25:33.859338162Z npm error code ERESOLVE
+2026-11-25T03:25:33.859354511Z npm error ERESOLVE could not resolve
+2026-11-25T03:25:33.85938671Z npm error
+2026-11-25T03:25:33.859434993Z npm error While resolving: vite@8.3.8
+2026-11-25T03:25:33.859436972Z npm error Found: esbuild@0.25.12
+2026-11-25T03:25:33.85943858Z npm error node_modules/esbuild
+2026-11-25T03:25:33.859440367Z npm error   dev esbuild@"^0.25.0" from the root project
+2026-11-25T03:25:33.85944166Z npm error
+2026-11-25T03:25:33.859443166Z npm error Could not resolve dependency:
+2026-11-25T03:25:33.859445166Z npm error peerOptional esbuild@"^0.27.0 || ^0.28.0" from vite@8.3.8
+2026-11-25T03:25:33.859446552Z npm error node_modules/vite
+2026-11-25T03:25:33.859447882Z npm error   vite@"^8.3.0" from the root project
+2026-11-25T03:25:33.85944926Z npm error   peer vite@"^5.2.0 || ^6 || ^7 || ^8" from @tailwindcss/vite@4.3.5
+2026-11-25T03:25:33.859450563Z npm error   node_modules/@tailwindcss/vite
+2026-11-25T03:25:33.859451866Z npm error     @tailwindcss/vite@"^4.3.3" from the root project
+2026-11-25T03:25:33.859453426Z npm error   2 more (@vitejs/plugin-react, vite-plugin-pwa)
+2026-11-25T03:25:33.859454698Z npm error
+2026-11-25T03:25:33.859456116Z npm error Conflicting peer dependency: esbuild@0.28.2
+2026-11-25T03:25:33.859457546Z npm error node_modules/esbuild
+2026-11-25T03:25:33.859458846Z npm error   peerOptional esbuild@"^0.27.0 || ^0.28.0" from vite@8.3.8
+2026-11-25T03:25:33.859460135Z npm error   node_modules/vite
+2026-11-25T03:25:33.859461435Z npm error     vite@"^8.3.0" from the root project
+2026-11-25T03:25:33.859462794Z npm error     peer vite@"^5.2.0 || ^6 || ^7 || ^8" from @tailwindcss/vite@4.3.5
+2026-11-25T03:25:33.859464052Z npm error     node_modules/@tailwindcss/vite
+2026-11-25T03:25:33.859465294Z npm error       @tailwindcss/vite@"^4.3.3" from the root project
+2026-11-25T03:25:33.859466621Z npm error     2 more (@vitejs/plugin-react, vite-plugin-pwa)
+2026-11-25T03:25:33.85946778Z npm error
+2026-11-25T03:25:33.859469055Z npm error Fix the upstream dependency conflict, or retry
+2026-11-25T03:25:33.859476646Z npm error this command with --force or --legacy-peer-deps
+2026-11-25T03:25:33.859478053Z npm error to accept an incorrect (and potentially broken) dependency resolution.
+2026-11-25T03:25:33.859480968Z npm error
+2026-11-25T03:25:33.859482287Z npm error
+2026-11-25T03:25:33.859483652Z npm error For a full report see:
+2026-11-25T03:25:33.859484904Z npm error /opt/render/.cache/_logs/2026-11-25T03_25_17_378Z-eresolve-report.txt
+2026-11-25T03:25:33.860656144Z npm error A complete log of this run can be found in: /opt/render/.cache/_logs/2026-11-25T03_25_17_378Z-debug-0.log
+2026-11-25T03:25:33.920388204Z ==> Build failed 😞
+2026-11-25T03:25:33.920401676Z ==> Common ways to troubleshoot your deploy: https://render.com/docs/troubleshooting-deploys
