@@ -12,4 +12,5 @@ uploads/
 *.log
 .env*
 !.env.example
+public/assets/aistudio/
 

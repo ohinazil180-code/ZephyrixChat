@@ -48,13 +48,21 @@ function parseDeviceLabel(ua: string): string {
   return 'Desktop Web Client';
 }
 
-function setSessionCookie(res: Response, rawToken: string): void {
-  res.cookie(SESSION_COOKIE_NAME, rawToken, {
+function getSessionCookieOptions(req: Request) {
+  const proto = String(req.headers['x-forwarded-proto'] || '');
+  const isHttps = req.secure || proto.split(',')[0]?.trim().toLowerCase() === 'https';
+  return {
     httpOnly: true,
-    secure: true,
-    sameSite: 'none',
-    partitioned: true,
+    secure: isHttps,
+    sameSite: (isHttps ? 'none' : 'lax') as 'none' | 'lax',
+    ...(isHttps ? { partitioned: true } : {}),
     path: '/',
+  };
+}
+
+function setSessionCookie(req: Request, res: Response, rawToken: string): void {
+  res.cookie(SESSION_COOKIE_NAME, rawToken, {
+    ...getSessionCookieOptions(req),
     maxAge: 30 * 24 * 60 * 60 * 1000,
   });
 }
@@ -75,7 +83,7 @@ function createServerSession(userId: string, req: Request, res: Response): { tok
     [sessionId, userId, tokenHash, deviceLabel, ua, ipHash, now, now, expiresAt]
   );
 
-  setSessionCookie(res, rawToken);
+  setSessionCookie(req, res, rawToken);
   return { token: rawToken, sessionId };
 }
 
@@ -439,13 +447,7 @@ export function registerAuthRoutes(app: Express): void {
 
   app.post('/api/v1/auth/logout', requireAuth, (req: AuthRequest, res) => {
     dbRun(`UPDATE sessions SET revoked_at = ? WHERE id = ?`, [nowIso(), req.authSessionId!]);
-    res.clearCookie(SESSION_COOKIE_NAME, {
-      httpOnly: true,
-      secure: true,
-      sameSite: 'none',
-      partitioned: true,
-      path: '/',
-    });
+    res.clearCookie(SESSION_COOKIE_NAME, getSessionCookieOptions(req));
     res.json({ ok: true });
   });
 

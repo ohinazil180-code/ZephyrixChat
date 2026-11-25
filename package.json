@@ -27,7 +27,7 @@
     "@zegocloud/zego-uikit-prebuilt": "^2.18.5",
     "cookie-parser": "^1.4.7",
     "dotenv": "^17.2.3",
-    "esbuild": "^0.25.0",
+    "esbuild": "^0.28.0",
     "express": "^4.21.2",
     "ioredis": "^6.0.0",
     "jose": "^6.2.18",
