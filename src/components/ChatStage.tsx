@@ -349,7 +349,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
     return (
       <div className="hidden md:flex flex-1 flex-col items-center justify-center p-8 text-center">
         <div className="rounded-3xl border border-slate-200 dark:border-white/10 bg-white dark:bg-[#121A2B] p-10 max-w-md space-y-4 shadow-xl">
-          <img src="/icon.svg" alt="Zephyrix" className="w-14 h-14 mx-auto rounded-2xl shadow-md" />
+          <img src={`${import.meta.env.BASE_URL}icon.svg`} alt="Zephyrix" className="w-14 h-14 mx-auto rounded-2xl shadow-md" />
           <h2 className="font-display text-2xl font-bold text-balance">{t.noChatsTitle}</h2>
           <p className="text-sm text-slate-500 dark:text-slate-400 leading-relaxed">{t.noChatsSubtitle}</p>
         </div>

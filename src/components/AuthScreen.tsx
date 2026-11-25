@@ -359,7 +359,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
       {/* Top Bar */}
       <header className="relative z-10 w-full max-w-7xl mx-auto px-5 sm:px-8 py-4 flex items-center justify-between gap-8">
         <div className="flex items-center gap-2.5 whitespace-nowrap shrink-0">
-          <img src="/icon.svg" alt="Zephyrix" className="w-8 h-8 rounded-xl" />
+          <img src={`${import.meta.env.BASE_URL}icon.svg`} alt="Zephyrix" className="w-8 h-8 rounded-xl" />
           <span className="font-display text-lg font-bold tracking-tight">{t.brand}</span>
         </div>
 

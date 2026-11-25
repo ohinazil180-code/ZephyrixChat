@@ -58,26 +58,39 @@ A full-stack real-time messaging and calling web application built with React, V
 
 `.gitignore` is already configured to exclude `node_modules/`, `dist/`, `dev-dist/`, `data/`, `uploads/`, `*.db*`, and `.env*` secrets so only clean source code is committed.
 
-1. Create a new empty repository on [GitHub](https://github.com/new) (for example, `zephyrix-chat`) without initializing a README or license on GitHub.
-2. Run these commands from the project root directory:
+1. Create a new empty repository on [GitHub](https://github.com/new) (for example, `zephyrix`).
+2. Run the included push helper script from the project root:
    ```bash
-   git init
+   chmod +x scripts/push-github.sh
+   ./scripts/push-github.sh https://github.com/<YOUR_GITHUB_USERNAME>/<YOUR_REPO_NAME>.git
+   ```
+   Or run the Git commands directly:
+   ```bash
+   git init -b main
    git add .
    git commit -m "Initial commit: Zephyrix messaging app"
-   git branch -M main
    git remote add origin https://github.com/<YOUR_GITHUB_USERNAME>/<YOUR_REPO_NAME>.git
    git push -u origin main
    ```
 
 ---
 
-## Create a Live Website Link (Render + GitHub Repository Website URL)
+## Get Your Live GitHub Website URL
 
-Because Zephyrix runs an Express backend, SQLite database, and WebSocket/SSE real-time server, it requires a Node.js web host rather than static-only GitHub Pages. A `render.yaml` blueprint is already included for one-click deployment:
+### Option A: Automatic GitHub Pages URL (`https://<username>.github.io/<repo>/`) + Render API
 
-1. Sign in to [Render](https://dashboard.render.com) with your GitHub account.
-2. Click **New +** -> **Blueprint** and select your pushed GitHub repository.
-3. Render reads `render.yaml` automatically (`npm ci && npm run build`, `npm start`, health check `/api/v1/health`).
-4. Add your optional environment secrets (`GEMINI_API_KEY`, `ZEGO_APP_ID`, `ZEGO_SERVER_SECRET`) in the Render service **Environment** tab (`SESSION_PEPPER` is auto-generated).
-5. Once deployed, copy your live Render URL (e.g. `https://<your-app-name>.onrender.com`).
-6. Open your GitHub repository page, click the gear icon next to **About** on the right sidebar, paste your live URL into the **Website** field, and save. Your GitHub repository now displays a direct clickable link to your live Zephyrix web app.
+A GitHub Actions workflow is included to publish the frontend directly to **GitHub Pages** on every push to `main`:
+
+1. Deploy the backend server to [Render](https://dashboard.render.com) via **New + -> Blueprint** using the included `render.yaml` file (this hosts the Express API, WebSocket/SSE stream, and SQLite database).
+2. In Render **Environment**, set `FRONTEND_URL` to `https://<YOUR_GITHUB_USERNAME>.github.io` so cross-origin requests from GitHub Pages are allowed.
+3. In your GitHub repository, open **Settings -> Secrets and variables -> Actions -> Variables** and create a variable named `VITE_API_URL` set to your Render URL (e.g. `https://<your-app>.onrender.com`).
+4. In your GitHub repository, open **Settings -> Pages**, set **Source** to **GitHub Actions**, and re-run or push to `main`.
+5. Your GitHub website is live at:
+   `https://<YOUR_GITHUB_USERNAME>.github.io/<YOUR_REPO_NAME>/`
+
+### Option B: Direct Full-Stack Render URL Linked on GitHub
+
+1. Deploy the entire full-stack app to [Render](https://dashboard.render.com) using `render.yaml` (`npm ci && npm run build`, `npm start`, health check `/api/v1/health`).
+2. Copy your live Render URL (`https://<your-app-name>.onrender.com`) or your GitHub Pages URL (`https://<YOUR_GITHUB_USERNAME>.github.io/<YOUR_REPO_NAME>/`).
+3. On your GitHub repository page, click the gear icon next to **About**, paste your live URL into the **Website** field, and save.
+

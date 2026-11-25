@@ -47,7 +47,7 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ locale, reduceMotion
           <div className="relative w-24 h-24 sm:w-28 sm:h-28 rounded-[22px] overflow-hidden bg-[#0B101B] ring-1 ring-inset ring-white/15">
             {!imgFailed ? (
               <img
-                src="/src/assets/images/zephyrix_splash_emblem_1795359941658.jpg"
+                src={`${import.meta.env.BASE_URL}src/assets/images/zephyrix_splash_emblem_1795359941658.jpg`}
                 alt="Zephyrix"
                 referrerPolicy="no-referrer"
                 onError={() => setImgFailed(true)}

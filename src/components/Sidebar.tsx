@@ -230,7 +230,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {/* Desktop Left Utility Rail */}
       <aside className="hidden md:flex flex-col items-center justify-between w-[68px] shrink-0 py-4 border-e border-slate-200 dark:border-white/10 bg-slate-50/70 dark:bg-[#0B101B]/60">
         <div className="flex flex-col items-center gap-2.5">
-          <img src="/icon.svg" alt="Zephyrix" className="w-10 h-10 rounded-2xl shadow-sm mb-1" />
+          <img src={`${import.meta.env.BASE_URL}icon.svg`} alt="Zephyrix" className="w-10 h-10 rounded-2xl shadow-sm mb-1" />
           <button
             type="button"
             onClick={() => openModal('direct')}
@@ -302,7 +302,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div className="px-4 pt-3.5 pb-3 space-y-3 border-b border-slate-200 dark:border-white/10 shrink-0">
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2.5 min-w-0">
-              <img src="/icon.svg" alt="Zephyrix" className="w-7 h-7 rounded-lg md:hidden" />
+              <img src={`${import.meta.env.BASE_URL}icon.svg`} alt="Zephyrix" className="w-7 h-7 rounded-lg md:hidden" />
               <h1 className="font-display text-lg font-bold tracking-tight truncate">{t.brand}</h1>
             </div>
 
