@@ -18,6 +18,7 @@ export type LiveEventPayload =
   | { type: 'message:new'; chatId: string; message: unknown }
   | { type: 'message:updated'; chatId: string; message: unknown }
   | { type: 'message:deleted'; chatId: string; messageId: string }
+  | { type: 'message:hidden'; chatId: string; messageIds: string[] }
   | {
       type: 'message:reaction';
       chatId: string;

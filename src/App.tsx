@@ -163,6 +163,7 @@ export default function App() {
           chatId?: string;
           message?: ChatMessage;
           messageId?: string;
+          messageIds?: string[];
           reactions?: MessageReaction[];
           userId?: string;
           isTyping?: boolean;
@@ -214,6 +215,13 @@ export default function App() {
                 ? { ...m, deletedAt: new Date().toISOString(), body: '', attachments: [], reactions: [] }
                 : m
             ),
+          }));
+          void loadChats();
+        } else if (evt.type === 'message:hidden' && evt.chatId && Array.isArray(evt.messageIds)) {
+          const hiddenSet = new Set(evt.messageIds);
+          setMessagesByChat((prev) => ({
+            ...prev,
+            [evt.chatId!]: (prev[evt.chatId!] || []).filter((m) => !hiddenSet.has(m.id)),
           }));
           void loadChats();
         } else if (evt.type === 'chat:updated') {
@@ -500,14 +508,25 @@ export default function App() {
     void loadChats();
   };
 
-  const handleMessageDeleted = (chatId: string, messageId: string) => {
+  const handleMessageDeleted = (chatId: string, messageIds: string | string[]) => {
+    const idSet = new Set(Array.isArray(messageIds) ? messageIds : [messageIds]);
+    const now = new Date().toISOString();
     setMessagesByChat((prev) => ({
       ...prev,
       [chatId]: (prev[chatId] || []).map((m) =>
-        m.id === messageId
-          ? { ...m, deletedAt: new Date().toISOString(), body: '', attachments: [], reactions: [] }
+        idSet.has(m.id)
+          ? { ...m, deletedAt: now, body: '', attachments: [], reactions: [] }
           : m
       ),
+    }));
+    void loadChats();
+  };
+
+  const handleMessagesHidden = (chatId: string, messageIds: string[]) => {
+    const hiddenSet = new Set(messageIds);
+    setMessagesByChat((prev) => ({
+      ...prev,
+      [chatId]: (prev[chatId] || []).filter((m) => !hiddenSet.has(m.id)),
     }));
     void loadChats();
   };
@@ -682,6 +701,7 @@ export default function App() {
           onMessageConfirmed={handleMessageConfirmed}
           onMessageUpdated={handleMessageUpdated}
           onMessageDeleted={handleMessageDeleted}
+          onMessagesHidden={handleMessagesHidden}
           onOpenLightbox={(att) => setLightboxAtt(att)}
           pendingDirectReply={pendingDirectReply}
           onClearPendingDirectReply={() => setPendingDirectReply(null)}

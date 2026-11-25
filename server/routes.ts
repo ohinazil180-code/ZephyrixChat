@@ -311,22 +311,34 @@ function getChatSummariesForUser(userId: string) {
        FROM messages m
        JOIN users u ON u.id = m.sender_id
        WHERE m.chat_id = ?
+         AND NOT EXISTS (
+           SELECT 1 FROM message_hidden_for mh
+           WHERE mh.message_id = m.id AND mh.user_id = ?
+         )
        ORDER BY m.created_at DESC
        LIMIT 1`,
-      [chatId]
+      [chatId, userId]
     );
 
     const lastReadAt = chat.last_read_at ? String(chat.last_read_at) : null;
     const unreadRow = lastReadAt
       ? dbGet<{ cnt: number }>(
           `SELECT COUNT(*) AS cnt FROM messages m
-           WHERE m.chat_id = ? AND m.sender_id != ? AND m.deleted_at IS NULL AND m.created_at > ?`,
-          [chatId, userId, lastReadAt]
+           WHERE m.chat_id = ? AND m.sender_id != ? AND m.deleted_at IS NULL AND m.created_at > ?
+             AND NOT EXISTS (
+               SELECT 1 FROM message_hidden_for mh
+               WHERE mh.message_id = m.id AND mh.user_id = ?
+             )`,
+          [chatId, userId, lastReadAt, userId]
         )
       : dbGet<{ cnt: number }>(
           `SELECT COUNT(*) AS cnt FROM messages m
-           WHERE m.chat_id = ? AND m.sender_id != ? AND m.deleted_at IS NULL`,
-          [chatId, userId]
+           WHERE m.chat_id = ? AND m.sender_id != ? AND m.deleted_at IS NULL
+             AND NOT EXISTS (
+               SELECT 1 FROM message_hidden_for mh
+               WHERE mh.message_id = m.id AND mh.user_id = ?
+             )`,
+          [chatId, userId, userId]
         );
 
     const hydratedLast = lastMsgRow ? hydrateMessages([lastMsgRow], userId)[0] : null;
@@ -1040,9 +1052,13 @@ export function registerApiRoutes(app: Express): void {
        FROM messages m
        JOIN users u ON u.id = m.sender_id
        WHERE m.chat_id = ?
+         AND NOT EXISTS (
+           SELECT 1 FROM message_hidden_for mh
+           WHERE mh.message_id = m.id AND mh.user_id = ?
+         )
        ORDER BY m.created_at DESC
        LIMIT ?`,
-      [chatId, limit]
+      [chatId, req.authUser!.id, limit]
     );
 
     rows.reverse();
@@ -1265,8 +1281,19 @@ export function registerApiRoutes(app: Express): void {
 
   app.delete('/api/v1/messages/:id', requireAuth, (req: AuthRequest, res) => {
     const msgId = String(req.params.id);
-    const msg = dbGet<{ id: string; chat_id: string; sender_id: string }>(
-      `SELECT id, chat_id, sender_id FROM messages WHERE id = ?`,
+    const userId = req.authUser!.id;
+    const rawScope = String(
+      req.query.scope ?? (req.body as { scope?: string } | undefined)?.scope ?? 'everyone'
+    )
+      .trim()
+      .toLowerCase();
+    if (rawScope !== 'me' && rawScope !== 'everyone') {
+      sendApiError(res, 400, 'INVALID_SCOPE', 'Delete scope must be "me" or "everyone".');
+      return;
+    }
+
+    const msg = dbGet<{ id: string; chat_id: string; sender_id: string; deleted_at: string | null }>(
+      `SELECT id, chat_id, sender_id, deleted_at FROM messages WHERE id = ?`,
       [msgId]
     );
     if (!msg) {
@@ -1274,17 +1301,123 @@ export function registerApiRoutes(app: Express): void {
       return;
     }
 
-    const membership = getMembership(msg.chat_id, req.authUser!.id);
-    const canDelete =
-      msg.sender_id === req.authUser!.id || membership?.role === 'owner' || membership?.role === 'admin';
-    if (!canDelete) {
-      sendApiError(res, 403, 'FORBIDDEN', 'You do not have permission to delete this message.');
+    const membership = getMembership(msg.chat_id, userId);
+    if (!membership || membership.left_at) {
+      sendApiError(res, 403, 'FORBIDDEN', 'Not a member of this conversation.');
       return;
     }
 
-    dbRun(`UPDATE messages SET deleted_at = ?, body = '' WHERE id = ?`, [nowIso(), msgId]);
+    if (rawScope === 'me') {
+      dbRun(
+        `INSERT OR IGNORE INTO message_hidden_for (message_id, user_id, hidden_at) VALUES (?, ?, ?)`,
+        [msgId, userId, nowIso()]
+      );
+      publishToUsers([userId], { type: 'message:hidden', chatId: msg.chat_id, messageIds: [msgId] });
+      publishToUsers([userId], { type: 'chat:updated', chatId: msg.chat_id });
+      res.json({ ok: true, scope: 'me', messageId: msgId });
+      return;
+    }
+
+    const canDeleteForEveryone =
+      msg.sender_id === userId || membership.role === 'owner' || membership.role === 'admin';
+    if (!canDeleteForEveryone) {
+      sendApiError(res, 403, 'FORBIDDEN', 'Only the message sender or group/channel admins can delete for everyone.');
+      return;
+    }
+
+    if (!msg.deleted_at) {
+      dbRun(`UPDATE messages SET deleted_at = ?, body = '' WHERE id = ?`, [nowIso(), msgId]);
+    }
     publishToChat(msg.chat_id, { type: 'message:deleted', chatId: msg.chat_id, messageId: msgId });
-    res.json({ ok: true });
+    res.json({ ok: true, scope: 'everyone', messageId: msgId });
+  });
+
+  const batchDeleteSchema = z.object({
+    messageIds: z.array(z.string().min(1)).min(1).max(100),
+    scope: z.enum(['me', 'everyone']),
+  });
+
+  app.post('/api/v1/messages/batch-delete', requireAuth, (req: AuthRequest, res) => {
+    const userId = req.authUser!.id;
+    const parsed = batchDeleteSchema.safeParse(req.body);
+    if (!parsed.success) {
+      sendApiError(res, 400, 'INVALID_INPUT', parsed.error.issues[0]?.message || 'Invalid delete request.');
+      return;
+    }
+
+    const uniqueIds = Array.from(new Set(parsed.data.messageIds));
+    const scope = parsed.data.scope;
+    const placeholders = uniqueIds.map(() => '?').join(', ');
+    const rows = dbAll<{ id: string; chat_id: string; sender_id: string; deleted_at: string | null }>(
+      `SELECT id, chat_id, sender_id, deleted_at FROM messages WHERE id IN (${placeholders})`,
+      uniqueIds
+    );
+    if (rows.length === 0) {
+      sendApiError(res, 404, 'MESSAGE_NOT_FOUND', 'No matching messages found.');
+      return;
+    }
+
+    const roleByChat = new Map<string, 'owner' | 'admin' | 'member'>();
+    for (const row of rows) {
+      if (!roleByChat.has(row.chat_id)) {
+        const m = getMembership(row.chat_id, userId);
+        if (!m || m.left_at) {
+          sendApiError(res, 403, 'FORBIDDEN', 'Not a member of this conversation.');
+          return;
+        }
+        roleByChat.set(row.chat_id, m.role);
+      }
+      if (scope === 'everyone') {
+        const role = roleByChat.get(row.chat_id);
+        const allowed = row.sender_id === userId || role === 'owner' || role === 'admin';
+        if (!allowed) {
+          sendApiError(
+            res,
+            403,
+            'FORBIDDEN',
+            'Only the message sender or group/channel admins can delete for everyone.'
+          );
+          return;
+        }
+      }
+    }
+
+    const now = nowIso();
+    if (scope === 'me') {
+      withTx(() => {
+        for (const row of rows) {
+          dbRun(
+            `INSERT OR IGNORE INTO message_hidden_for (message_id, user_id, hidden_at) VALUES (?, ?, ?)`,
+            [row.id, userId, now]
+          );
+        }
+      });
+
+      const byChat = new Map<string, string[]>();
+      for (const row of rows) {
+        const list = byChat.get(row.chat_id) || [];
+        list.push(row.id);
+        byChat.set(row.chat_id, list);
+      }
+      for (const [chatId, messageIds] of byChat.entries()) {
+        publishToUsers([userId], { type: 'message:hidden', chatId, messageIds });
+        publishToUsers([userId], { type: 'chat:updated', chatId });
+      }
+      res.json({ ok: true, scope: 'me', deletedIds: rows.map((r) => r.id) });
+      return;
+    }
+
+    withTx(() => {
+      for (const row of rows) {
+        if (!row.deleted_at) {
+          dbRun(`UPDATE messages SET deleted_at = ?, body = '' WHERE id = ?`, [now, row.id]);
+        }
+      }
+    });
+    for (const row of rows) {
+      publishToChat(row.chat_id, { type: 'message:deleted', chatId: row.chat_id, messageId: row.id });
+    }
+    res.json({ ok: true, scope: 'everyone', deletedIds: rows.map((r) => r.id) });
   });
 
   app.post('/api/v1/messages/:id/pin', requireAuth, (req: AuthRequest, res) => {
@@ -1629,6 +1762,267 @@ export function registerApiRoutes(app: Express): void {
       ok: true,
       forwardedCount: forwardedMessageIds.length,
       chatIds: forwardedMessageIds.map((f) => f.chatId),
+      messages: hydratedMessages,
+    });
+  });
+
+  const batchForwardSchema = z.object({
+    messageIds: z.array(z.string().min(1)).min(1).max(50),
+    targetChatIds: z.array(z.string().min(1)).max(20).optional().default([]),
+    targetUserIds: z.array(z.string().min(1)).max(20).optional().default([]),
+  });
+
+  app.post('/api/v1/messages/forward-batch', requireAuth, (req: AuthRequest, res) => {
+    const userId = req.authUser!.id;
+    const parsed = batchForwardSchema.safeParse(req.body);
+    if (!parsed.success) {
+      sendApiError(res, 400, 'INVALID_INPUT', parsed.error.issues[0]?.message || 'Invalid forward request.');
+      return;
+    }
+
+    const uniqueMessageIds = Array.from(new Set(parsed.data.messageIds));
+    const uniqueTargetChats = Array.from(new Set(parsed.data.targetChatIds));
+    const uniqueTargetUsers = Array.from(new Set(parsed.data.targetUserIds.filter((uid) => uid !== userId)));
+    if (uniqueTargetChats.length + uniqueTargetUsers.length === 0) {
+      sendApiError(res, 400, 'NO_RECIPIENTS', 'Select at least one recipient to forward messages.');
+      return;
+    }
+    if (uniqueTargetChats.length + uniqueTargetUsers.length > 20) {
+      sendApiError(res, 400, 'TOO_MANY_RECIPIENTS', 'You can forward to at most 20 recipients at once.');
+      return;
+    }
+
+    const placeholders = uniqueMessageIds.map(() => '?').join(', ');
+    const sourceRows = dbAll<Record<string, unknown>>(
+      `SELECT m.id, m.chat_id, m.sender_id, m.body, m.forwarded_from, m.deleted_at, m.created_at,
+              u.display_name AS sender_name
+       FROM messages m
+       JOIN users u ON u.id = m.sender_id
+       WHERE m.id IN (${placeholders})
+         AND m.deleted_at IS NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM message_hidden_for mh
+           WHERE mh.message_id = m.id AND mh.user_id = ?
+         )
+       ORDER BY m.created_at ASC, m.rowid ASC`,
+      [...uniqueMessageIds, userId]
+    );
+
+    if (sourceRows.length === 0) {
+      sendApiError(res, 404, 'MESSAGE_NOT_FOUND', 'No valid messages found to forward.');
+      return;
+    }
+
+    const checkedSourceChats = new Set<string>();
+    for (const row of sourceRows) {
+      const srcChatId = String(row.chat_id);
+      if (!checkedSourceChats.has(srcChatId)) {
+        const srcMembership = getMembership(srcChatId, userId);
+        if (!srcMembership || srcMembership.left_at) {
+          sendApiError(res, 403, 'FORBIDDEN', 'You do not have access to one or more selected messages.');
+          return;
+        }
+        checkedSourceChats.add(srcChatId);
+      }
+    }
+
+    const srcIds = sourceRows.map((r) => String(r.id));
+    const srcAttPlaceholders = srcIds.map(() => '?').join(', ');
+    const allAttRows = dbAll<Record<string, unknown>>(
+      `SELECT message_id, storage_key, url, original_name, mime_type, kind, size_bytes, duration_ms, checksum
+       FROM attachments WHERE message_id IN (${srcAttPlaceholders})
+       ORDER BY created_at ASC`,
+      srcIds
+    );
+    const attsBySourceMsg = new Map<string, Record<string, unknown>[]>();
+    for (const att of allAttRows) {
+      const mid = String(att.message_id);
+      const list = attsBySourceMsg.get(mid) || [];
+      list.push(att);
+      attsBySourceMsg.set(mid, list);
+    }
+
+    const forwardableItems = sourceRows
+      .map((row) => {
+        const id = String(row.id);
+        const bodyText = String(row.body || '').trim();
+        const attachments = attsBySourceMsg.get(id) || [];
+        const forwardedFromLabel = row.forwarded_from
+          ? String(row.forwarded_from)
+          : String(row.sender_name || '');
+        return { id, bodyText, attachments, forwardedFromLabel };
+      })
+      .filter((item) => item.bodyText.length > 0 || item.attachments.length > 0);
+
+    if (forwardableItems.length === 0) {
+      sendApiError(res, 400, 'EMPTY_MESSAGE', 'Nothing to forward.');
+      return;
+    }
+
+    const now = nowIso();
+    const resolvedChatIds = new Set<string>(uniqueTargetChats);
+    const newlyCreatedUsers: Array<{ chatId: string; userId: string }> = [];
+
+    for (const targetUserId of uniqueTargetUsers) {
+      const targetUser = dbGet<{ id: string }>(
+        `SELECT id FROM users WHERE id = ? AND deleted_at IS NULL`,
+        [targetUserId]
+      );
+      if (!targetUser) continue;
+
+      const blocked = dbGet<{ blocker_id: string }>(
+        `SELECT blocker_id FROM blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)`,
+        [userId, targetUserId, targetUserId, userId]
+      );
+      if (blocked) continue;
+
+      const existingDm = dbGet<{ id: string }>(
+        `SELECT c.id FROM chats c
+         JOIN chat_members m1 ON m1.chat_id = c.id AND m1.user_id = ? AND m1.left_at IS NULL
+         JOIN chat_members m2 ON m2.chat_id = c.id AND m2.user_id = ? AND m2.left_at IS NULL
+         WHERE c.type = 'direct' AND c.deleted_at IS NULL
+         LIMIT 1`,
+        [userId, targetUserId]
+      );
+      if (existingDm) {
+        resolvedChatIds.add(existingDm.id);
+      } else {
+        const newDmId = crypto.randomUUID();
+        const pairIds = [userId, targetUserId].sort();
+        const zegoRoomId = `dm_${pairIds[0].slice(0, 8)}_${pairIds[1].slice(0, 8)}`;
+        withTx(() => {
+          dbRun(
+            `INSERT INTO chats (id, type, title, zego_room_id, created_by, created_at)
+             VALUES (?, 'direct', '', ?, ?, ?)`,
+            [newDmId, zegoRoomId, userId, now]
+          );
+          dbRun(`INSERT INTO chat_members (chat_id, user_id, role, joined_at) VALUES (?, ?, 'member', ?)`, [
+            newDmId,
+            userId,
+            now,
+          ]);
+          dbRun(`INSERT INTO chat_members (chat_id, user_id, role, joined_at) VALUES (?, ?, 'member', ?)`, [
+            newDmId,
+            targetUserId,
+            now,
+          ]);
+        });
+        resolvedChatIds.add(newDmId);
+        newlyCreatedUsers.push({ chatId: newDmId, userId: targetUserId });
+      }
+    }
+
+    const baseTimeMs = Date.now();
+    const forwardedRecords: Array<{ chatId: string; messageId: string }> = [];
+    const destinationChatIds = new Set<string>();
+
+    withTx(() => {
+      for (const destChatId of resolvedChatIds) {
+        const destChat = dbGet<{ id: string; type: string; is_banned: number }>(
+          `SELECT id, type, is_banned FROM chats WHERE id = ? AND deleted_at IS NULL`,
+          [destChatId]
+        );
+        if (!destChat || Boolean(destChat.is_banned)) continue;
+
+        const destMembership = getMembership(destChatId, userId);
+        if (!destMembership || destMembership.left_at) continue;
+
+        if (destChat.type === 'channel' && destMembership.role !== 'owner' && destMembership.role !== 'admin') {
+          continue;
+        }
+
+        if (destChat.type === 'direct') {
+          const peer = dbGet<{ user_id: string }>(
+            `SELECT user_id FROM chat_members WHERE chat_id = ? AND user_id != ? AND left_at IS NULL`,
+            [destChatId, userId]
+          );
+          if (peer) {
+            const blocked = dbGet<{ blocker_id: string }>(
+              `SELECT blocker_id FROM blocks WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)`,
+              [userId, peer.user_id, peer.user_id, userId]
+            );
+            if (blocked) continue;
+          }
+        }
+
+        let lastTs = now;
+        forwardableItems.forEach((item, idx) => {
+          const newMessageId = crypto.randomUUID();
+          const createdTs = new Date(baseTimeMs + idx).toISOString();
+          lastTs = createdTs;
+
+          dbRun(
+            `INSERT INTO messages (id, client_id, chat_id, sender_id, forwarded_from, body, is_silent, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, 0, ?)`,
+            [newMessageId, null, destChatId, userId, item.forwardedFromLabel, item.bodyText, createdTs]
+          );
+
+          for (const att of item.attachments) {
+            dbRun(
+              `INSERT INTO attachments (id, message_id, storage_key, url, original_name, mime_type, kind, size_bytes, duration_ms, checksum, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              [
+                crypto.randomUUID(),
+                newMessageId,
+                String(att.storage_key),
+                String(att.url),
+                String(att.original_name),
+                String(att.mime_type),
+                String(att.kind),
+                Number(att.size_bytes || 0),
+                Number(att.duration_ms || 0),
+                String(att.checksum || ''),
+                createdTs,
+              ]
+            );
+          }
+
+          forwardedRecords.push({ chatId: destChatId, messageId: newMessageId });
+        });
+
+        dbRun(`UPDATE chat_members SET last_read_at = ? WHERE chat_id = ? AND user_id = ?`, [
+          lastTs,
+          destChatId,
+          userId,
+        ]);
+        destinationChatIds.add(destChatId);
+      }
+    });
+
+    if (forwardedRecords.length === 0) {
+      sendApiError(res, 403, 'FORWARD_FAILED', 'Unable to forward to any of the selected recipients.');
+      return;
+    }
+
+    for (const item of newlyCreatedUsers) {
+      publishToUsers([item.userId], { type: 'chat:updated', chatId: item.chatId });
+    }
+
+    const hydratedMessages: Record<string, unknown>[] = [];
+    for (const item of forwardedRecords) {
+      const row = dbGet<Record<string, unknown>>(
+        `SELECT m.*, u.display_name AS sender_name, u.username AS sender_username,
+                u.avatar_url AS sender_avatar, u.verified_flag AS sender_verified, u.developer_badge AS sender_developer_badge
+         FROM messages m
+         JOIN users u ON u.id = m.sender_id
+         WHERE m.id = ?`,
+        [item.messageId]
+      );
+      const hydrated = row ? hydrateMessages([row], userId)[0] : null;
+      if (hydrated) {
+        hydratedMessages.push(hydrated);
+        publishToChat(item.chatId, { type: 'message:new', chatId: item.chatId, message: hydrated });
+      }
+    }
+    for (const destChatId of destinationChatIds) {
+      publishToChat(destChatId, { type: 'chat:updated', chatId: destChatId });
+    }
+
+    res.status(201).json({
+      ok: true,
+      forwardedCount: destinationChatIds.size,
+      forwardedMessagesCount: forwardableItems.length,
+      chatIds: Array.from(destinationChatIds),
       messages: hydratedMessages,
     });
   });

@@ -70,7 +70,8 @@ interface ChatStageProps {
   onMessageOptimistic: (msg: ChatMessage) => void;
   onMessageConfirmed: (clientId: string, msg: ChatMessage) => void;
   onMessageUpdated: (msg: ChatMessage) => void;
-  onMessageDeleted: (chatId: string, messageId: string) => void;
+  onMessageDeleted: (chatId: string, messageIds: string | string[]) => void;
+  onMessagesHidden: (chatId: string, messageIds: string[]) => void;
   onOpenLightbox: (att: MessageAttachment) => void;
   pendingDirectReply?: PendingDirectReply | null;
   onClearPendingDirectReply?: () => void;
@@ -156,6 +157,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   onMessageConfirmed,
   onMessageUpdated,
   onMessageDeleted,
+  onMessagesHidden,
   onOpenLightbox,
   pendingDirectReply,
   onClearPendingDirectReply,
@@ -187,8 +189,12 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   const [showAllEmojis, setShowAllEmojis] = useState(false);
   const [pressingMsgId, setPressingMsgId] = useState<string | null>(null);
 
-  // Multi-recipient Forward Contact Picker state
-  const [forwardingMsg, setForwardingMsg] = useState<ChatMessage | null>(null);
+  // Multi-message Selection Mode state
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedMsgIds, setSelectedMsgIds] = useState<string[]>([]);
+
+  // Multi-recipient Forward Contact Picker state (1 or many messages)
+  const [forwardingMsgs, setForwardingMsgs] = useState<ChatMessage[]>([]);
   const [forwardSearch, setForwardSearch] = useState('');
   const [forwardContacts, setForwardContacts] = useState<PeerUser[]>([]);
   const [forwardSearching, setForwardSearching] = useState(false);
@@ -196,6 +202,11 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   const [selectedUsers, setSelectedUsers] = useState<PeerUser[]>([]);
   const [forwardingBusy, setForwardingBusy] = useState(false);
   const [forwardError, setForwardError] = useState<string | null>(null);
+
+  // Dual-scope Delete Modal state ("Delete for me" vs "Delete for everyone")
+  const [deleteTargets, setDeleteTargets] = useState<ChatMessage[] | null>(null);
+  const [deletingScope, setDeletingScope] = useState<'me' | 'everyone' | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const longPressRef = useRef<{ timer: number | null; startX: number; startY: number }>({
     timer: null,
@@ -233,6 +244,11 @@ export const ChatStage: React.FC<ChatStageProps> = ({
     setComposerError(null);
     setPendingAttachments([]);
     setBody('');
+    setSelectionMode(false);
+    setSelectedMsgIds([]);
+    setForwardingMsgs([]);
+    setDeleteTargets(null);
+    setDeleteError(null);
     setActiveQuote((prev) => (prev && chat?.id === prev.chatId ? prev : null));
     if (longPressRef.current.timer !== null) {
       window.clearTimeout(longPressRef.current.timer);
@@ -260,7 +276,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
 
   // Fetch contacts for the multi-recipient Forward dialog
   useEffect(() => {
-    if (!forwardingMsg) return;
+    if (forwardingMsgs.length === 0) return;
     let active = true;
     setForwardSearching(true);
     const timer = window.setTimeout(() => {
@@ -280,7 +296,28 @@ export const ChatStage: React.FC<ChatStageProps> = ({
       active = false;
       window.clearTimeout(timer);
     };
-  }, [forwardingMsg, forwardSearch]);
+  }, [forwardingMsgs.length, forwardSearch]);
+
+  // Escape exits modals or selection mode cleanly
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (deleteTargets && !deletingScope) {
+        setDeleteTargets(null);
+        setDeleteError(null);
+      } else if (forwardingMsgs.length > 0 && !forwardingBusy) {
+        setForwardingMsgs([]);
+      } else if (menuMsgId) {
+        setMenuMsgId(null);
+        setShowAllEmojis(false);
+      } else if (selectionMode) {
+        setSelectionMode(false);
+        setSelectedMsgIds([]);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [deleteTargets, deletingScope, forwardingMsgs.length, forwardingBusy, menuMsgId, selectionMode]);
 
   useEffect(() => {
     return () => {
@@ -538,7 +575,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   };
 
   const handleBubblePointerDown = (e: React.PointerEvent<HTMLDivElement>, msg: ChatMessage) => {
-    if (msg.deletedAt) return;
+    if (selectionMode) return;
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     const target = e.target as HTMLElement;
     if (target.closest('button, a, audio, video, input, textarea')) return;
@@ -651,18 +688,68 @@ export const ChatStage: React.FC<ChatStageProps> = ({
     }
   };
 
-  const handleDeleteMsg = async (msgId: string) => {
+  const enterSelectionWith = (msg: ChatMessage) => {
     setMenuMsgId(null);
+    setShowAllEmojis(false);
+    setSelectionMode(true);
+    setSelectedMsgIds((prev) => (prev.includes(msg.id) ? prev : [...prev, msg.id]));
+  };
+
+  const toggleMessageSelection = (msgId: string) => {
+    setSelectedMsgIds((prev) =>
+      prev.includes(msgId) ? prev.filter((id) => id !== msgId) : [...prev, msgId]
+    );
+  };
+
+  const exitSelectionMode = () => {
+    setSelectionMode(false);
+    setSelectedMsgIds([]);
+  };
+
+  const openDeleteDialog = (targets: ChatMessage[]) => {
+    if (targets.length === 0) return;
+    setMenuMsgId(null);
+    setShowAllEmojis(false);
+    setDeleteError(null);
+    setDeleteTargets(targets);
+  };
+
+  const handleConfirmDelete = async (scope: 'me' | 'everyone') => {
+    if (!deleteTargets || deleteTargets.length === 0) return;
+    const targetIds = deleteTargets.map((m) => m.id);
+    setDeletingScope(scope);
+    setDeleteError(null);
     try {
-      await apiFetch(`/api/v1/messages/${msgId}`, { method: 'DELETE' });
-      onMessageDeleted(chat.id, msgId);
-    } catch {
-      // ignore
+      if (targetIds.length === 1) {
+        await apiFetch(`/api/v1/messages/${targetIds[0]}?scope=${scope}`, {
+          method: 'DELETE',
+        });
+      } else {
+        await apiFetch('/api/v1/messages/batch-delete', {
+          method: 'POST',
+          body: JSON.stringify({ messageIds: targetIds, scope }),
+        });
+      }
+      if (scope === 'me') {
+        onMessagesHidden(chat.id, targetIds);
+        showToast(t.deletedForMeSuccess);
+      } else {
+        onMessageDeleted(chat.id, targetIds);
+        showToast(t.deletedForEveryoneSuccess);
+      }
+      setDeleteTargets(null);
+      exitSelectionMode();
+    } catch (err) {
+      setDeleteError(err instanceof ApiError ? err.message : 'Unable to delete message.');
+    } finally {
+      setDeletingScope(null);
     }
   };
 
-  const openForwardDialog = (msg: ChatMessage) => {
-    setForwardingMsg(msg);
+  const openForwardDialog = (msgsToForward: ChatMessage[]) => {
+    const valid = msgsToForward.filter((m) => !m.deletedAt);
+    if (valid.length === 0) return;
+    setForwardingMsgs(valid);
     setForwardSearch('');
     setSelectedChatIds([]);
     setSelectedUsers([]);
@@ -687,7 +774,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
   };
 
   const handleConfirmForward = async () => {
-    if (!forwardingMsg) return;
+    if (forwardingMsgs.length === 0) return;
     if (selectedChatIds.length + selectedUsers.length === 0) {
       setForwardError(t.forwardEmptySelection);
       return;
@@ -695,20 +782,22 @@ export const ChatStage: React.FC<ChatStageProps> = ({
     setForwardingBusy(true);
     setForwardError(null);
     try {
-      const res = await apiFetch<{ forwardedCount: number }>(`/api/v1/messages/${forwardingMsg.id}/forward`, {
+      const res = await apiFetch<{ forwardedCount: number }>('/api/v1/messages/forward-batch', {
         method: 'POST',
         body: JSON.stringify({
+          messageIds: forwardingMsgs.map((m) => m.id),
           targetChatIds: selectedChatIds,
           targetUserIds: selectedUsers.map((u) => u.id),
         }),
       });
-      setForwardingMsg(null);
+      setForwardingMsgs([]);
       setSelectedChatIds([]);
       setSelectedUsers([]);
+      exitSelectionMode();
       onRefreshChats?.();
       showToast(`${t.forwardSuccess} ${res.forwardedCount}`);
     } catch (err) {
-      setForwardError(err instanceof ApiError ? err.message : 'Unable to forward message.');
+      setForwardError(err instanceof ApiError ? err.message : 'Unable to forward messages.');
     } finally {
       setForwardingBusy(false);
     }
@@ -760,6 +849,9 @@ export const ChatStage: React.FC<ChatStageProps> = ({
         : chat.type === 'saved'
           ? t.savedInfo
           : `${chat.memberCount} ${chat.type === 'channel' ? t.subscribersCount : t.membersCount}`;
+
+  const selectedMessages = messages.filter((m) => selectedMsgIds.includes(m.id));
+  const forwardableSelectedMessages = selectedMessages.filter((m) => !m.deletedAt);
 
   const avatarKind =
     chat.type === 'saved'
@@ -904,6 +996,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
           const showDate = dateLabel !== lastDateLabel;
           lastDateLabel = dateLabel;
           const isMine = msg.senderId === user.id;
+          const isSelected = selectedMsgIds.includes(msg.id);
 
           return (
             <React.Fragment key={msg.id}>
@@ -918,45 +1011,79 @@ export const ChatStage: React.FC<ChatStageProps> = ({
                   if (el) messageRefs.current.set(msg.id, el);
                   else messageRefs.current.delete(msg.id);
                 }}
-                className={`flex ${isMine ? 'justify-end' : 'justify-start'} group relative`}
+                onClick={(e) => {
+                  if (!selectionMode) return;
+                  e.stopPropagation();
+                  toggleMessageSelection(msg.id);
+                }}
+                className={`flex items-center gap-2 group relative rounded-2xl transition-colors ${
+                  selectionMode ? 'cursor-pointer px-1.5 py-0.5' : ''
+                } ${
+                  selectionMode && isSelected
+                    ? 'bg-indigo-500/10 dark:bg-indigo-500/15'
+                    : ''
+                }`}
               >
-                <div
-                  onPointerDown={(e) => handleBubblePointerDown(e, msg)}
-                  onPointerMove={handleBubblePointerMove}
-                  onPointerUp={cancelLongPress}
-                  onPointerCancel={cancelLongPress}
-                  onDoubleClick={(e) => {
-                    if (msg.deletedAt || !canPost) return;
-                    const target = e.target as HTMLElement;
-                    if (target.closest('button, a, audio, video, input, textarea')) return;
-                    setReplyTo(msg);
-                    setEditingMsg(null);
-                    setActiveQuote(null);
-                  }}
-                  onContextMenu={(e) => {
-                    if (msg.deletedAt) return;
-                    const sel = window.getSelection()?.toString();
-                    if (sel) return;
-                    const target = e.target as HTMLElement;
-                    if (target.closest('a, audio, video, input, textarea')) return;
-                    e.preventDefault();
-                    e.stopPropagation();
-                    cancelLongPress();
-                    setShowAllEmojis(false);
-                    setMenuMsgId(msg.id);
-                  }}
-                  className={`max-w-[84%] sm:max-w-[68%] rounded-2xl px-4 py-2.5 shadow-sm relative transition-all duration-200 ${
-                    pressingMsgId === msg.id ? 'scale-[0.98] select-none' : ''
-                  } ${
-                    highlightedMsgId === msg.id
-                      ? 'ring-2 ring-sky-400 ring-offset-2 ring-offset-[#F5F7FB] dark:ring-offset-[#0B101B] shadow-lg'
-                      : ''
-                  } ${
-                    isMine
-                      ? 'bg-indigo-600 text-white rounded-br-md'
-                      : 'bg-white dark:bg-[#1A2438] text-slate-900 dark:text-slate-100 border border-slate-200 dark:border-white/10 rounded-bl-md'
-                  }`}
-                >
+                {selectionMode && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleMessageSelection(msg.id);
+                    }}
+                    aria-label={isSelected ? 'Deselect message' : 'Select message'}
+                    className="min-h-[44px] min-w-[44px] flex items-center justify-center shrink-0 focus:outline-none"
+                  >
+                    <span
+                      className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all ${
+                        isSelected
+                          ? 'bg-indigo-600 border-indigo-600 text-white scale-105 shadow-sm'
+                          : 'border-slate-300 dark:border-white/30 bg-white/70 dark:bg-[#121A2B]/80'
+                      }`}
+                    >
+                      {isSelected && <Check className="w-3.5 h-3.5 stroke-[2.75]" />}
+                    </span>
+                  </button>
+                )}
+
+                <div className={`flex-1 flex ${isMine ? 'justify-end' : 'justify-start'} min-w-0 relative`}>
+                  <div
+                    onPointerDown={(e) => handleBubblePointerDown(e, msg)}
+                    onPointerMove={handleBubblePointerMove}
+                    onPointerUp={cancelLongPress}
+                    onPointerCancel={cancelLongPress}
+                    onDoubleClick={(e) => {
+                      if (selectionMode || msg.deletedAt || !canPost) return;
+                      const target = e.target as HTMLElement;
+                      if (target.closest('button, a, audio, video, input, textarea')) return;
+                      setReplyTo(msg);
+                      setEditingMsg(null);
+                      setActiveQuote(null);
+                    }}
+                    onContextMenu={(e) => {
+                      if (selectionMode) return;
+                      const sel = window.getSelection()?.toString();
+                      if (sel) return;
+                      const target = e.target as HTMLElement;
+                      if (target.closest('a, audio, video, input, textarea')) return;
+                      e.preventDefault();
+                      e.stopPropagation();
+                      cancelLongPress();
+                      setShowAllEmojis(false);
+                      setMenuMsgId(msg.id);
+                    }}
+                    className={`max-w-[84%] sm:max-w-[68%] rounded-2xl px-4 py-2.5 shadow-sm relative transition-all duration-200 ${
+                      pressingMsgId === msg.id ? 'scale-[0.98] select-none' : ''
+                    } ${
+                      highlightedMsgId === msg.id
+                        ? 'ring-2 ring-sky-400 ring-offset-2 ring-offset-[#F5F7FB] dark:ring-offset-[#0B101B] shadow-lg'
+                        : ''
+                    } ${
+                      isMine
+                        ? 'bg-indigo-600 text-white rounded-br-md'
+                        : 'bg-white dark:bg-[#1A2438] text-slate-900 dark:text-slate-100 border border-slate-200 dark:border-white/10 rounded-bl-md'
+                    }`}
+                  >
                   {/* Group/Channel or Bot sender header */}
                   {!isMine && (chat.type === 'group' || chat.type === 'channel' || chat.type === 'ai' || msg.isBot || String(msg.senderId).startsWith('bot_')) && (
                     <div className="flex items-center gap-1.5 mb-1 flex-wrap">
@@ -1214,7 +1341,7 @@ export const ChatStage: React.FC<ChatStageProps> = ({
                         )}
                       </span>
                     )}
-                    {!msg.deletedAt && (
+                    {!selectionMode && (
                       <button
                         type="button"
                         onClick={(e) => {
@@ -1232,146 +1359,149 @@ export const ChatStage: React.FC<ChatStageProps> = ({
                 </div>
 
                 {/* Contextual Floating Reaction Tray & Actions Popover */}
-                {menuMsgId === msg.id && !msg.deletedAt && (
+                {menuMsgId === msg.id && !selectionMode && (
                   <div
                     onClick={(e) => e.stopPropagation()}
                     className={`absolute z-30 top-full mt-1.5 ${
                       isMine ? 'end-0' : 'start-0'
-                    } w-72 rounded-2xl border border-slate-200 dark:border-white/15 bg-white/95 dark:bg-[#121A2B]/95 backdrop-blur-md shadow-2xl p-2 space-y-1.5 transition-all duration-150`}
+                    } ${msg.deletedAt ? 'w-48' : 'w-72'} rounded-2xl border border-slate-200 dark:border-white/15 bg-white/95 dark:bg-[#121A2B]/95 backdrop-blur-md shadow-2xl p-2 space-y-1.5 transition-all duration-150`}
                   >
-                    <div className="flex items-center justify-between gap-0.5 px-1 py-1 border-b border-slate-100 dark:border-white/10">
-                      {REACTION_CHOICES.map((em) => {
-                        const isActive = Boolean(msg.reactions?.some((r) => r.emoji === em && r.reactedByMe));
-                        return (
+                    {!msg.deletedAt && (
+                      <>
+                        <div className="flex items-center justify-between gap-0.5 px-1 py-1 border-b border-slate-100 dark:border-white/10">
+                          {REACTION_CHOICES.map((em) => {
+                            const isActive = Boolean(msg.reactions?.some((r) => r.emoji === em && r.reactedByMe));
+                            return (
+                              <button
+                                key={em}
+                                type="button"
+                                onClick={() => void handleReact(msg.id, em)}
+                                aria-label={`React with ${em}`}
+                                className={`min-h-[44px] min-w-[36px] sm:min-h-[36px] sm:min-w-[36px] flex-1 rounded-xl text-lg flex items-center justify-center transition-transform active:scale-90 ${
+                                  isActive
+                                    ? 'bg-indigo-600/20 ring-1 ring-indigo-500/40'
+                                    : 'hover:bg-slate-100 dark:hover:bg-white/10'
+                                }`}
+                              >
+                                {em}
+                              </button>
+                            );
+                          })}
                           <button
-                            key={em}
                             type="button"
-                            onClick={() => void handleReact(msg.id, em)}
-                            aria-label={`React with ${em}`}
-                            className={`min-h-[44px] min-w-[36px] sm:min-h-[36px] sm:min-w-[36px] flex-1 rounded-xl text-lg flex items-center justify-center transition-transform active:scale-90 ${
-                              isActive
-                                ? 'bg-indigo-600/20 ring-1 ring-indigo-500/40'
-                                : 'hover:bg-slate-100 dark:hover:bg-white/10'
+                            onClick={() => setShowAllEmojis((v) => !v)}
+                            aria-label="More emojis"
+                            className={`min-h-[44px] min-w-[36px] sm:min-h-[36px] sm:min-w-[36px] rounded-xl flex items-center justify-center transition-colors ${
+                              showAllEmojis
+                                ? 'bg-indigo-600 text-white'
+                                : 'text-slate-500 hover:bg-slate-100 dark:hover:bg-white/10'
                             }`}
                           >
-                            {em}
+                            <Plus className={`w-4 h-4 transition-transform duration-150 ${showAllEmojis ? 'rotate-45' : ''}`} />
                           </button>
-                        );
-                      })}
-                      <button
-                        type="button"
-                        onClick={() => setShowAllEmojis((v) => !v)}
-                        aria-label="More emojis"
-                        className={`min-h-[44px] min-w-[36px] sm:min-h-[36px] sm:min-w-[36px] rounded-xl flex items-center justify-center transition-colors ${
-                          showAllEmojis
-                            ? 'bg-indigo-600 text-white'
-                            : 'text-slate-500 hover:bg-slate-100 dark:hover:bg-white/10'
-                        }`}
-                      >
-                        <Plus className={`w-4 h-4 transition-transform duration-150 ${showAllEmojis ? 'rotate-45' : ''}`} />
-                      </button>
-                    </div>
+                        </div>
 
-                    {showAllEmojis && (
-                      <div className="grid grid-cols-6 gap-1 px-1 py-1.5 border-b border-slate-100 dark:border-white/10">
-                        {EXTENDED_REACTION_CHOICES.map((em) => {
-                          const isActive = Boolean(msg.reactions?.some((r) => r.emoji === em && r.reactedByMe));
-                          return (
-                            <button
-                              key={em}
-                              type="button"
-                              onClick={() => void handleReact(msg.id, em)}
-                              className={`min-h-[40px] rounded-xl text-base flex items-center justify-center transition-transform active:scale-90 ${
-                                isActive
-                                  ? 'bg-indigo-600/20 ring-1 ring-indigo-500/40'
-                                  : 'hover:bg-slate-100 dark:hover:bg-white/10'
-                              }`}
-                            >
-                              {em}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    )}
+                        {showAllEmojis && (
+                          <div className="grid grid-cols-6 gap-1 px-1 py-1.5 border-b border-slate-100 dark:border-white/10">
+                            {EXTENDED_REACTION_CHOICES.map((em) => {
+                              const isActive = Boolean(msg.reactions?.some((r) => r.emoji === em && r.reactedByMe));
+                              return (
+                                <button
+                                  key={em}
+                                  type="button"
+                                  onClick={() => void handleReact(msg.id, em)}
+                                  className={`min-h-[40px] rounded-xl text-base flex items-center justify-center transition-transform active:scale-90 ${
+                                    isActive
+                                      ? 'bg-indigo-600/20 ring-1 ring-indigo-500/40'
+                                      : 'hover:bg-slate-100 dark:hover:bg-white/10'
+                                  }`}
+                                >
+                                  {em}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
 
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setReplyTo(msg);
-                        setEditingMsg(null);
-                        setActiveQuote(null);
-                        setMenuMsgId(null);
-                      }}
-                      className="w-full text-start px-3 py-2 rounded-xl text-xs font-medium hover:bg-slate-100 dark:hover:bg-white/5 flex items-center gap-2.5"
-                    >
-                      <CornerUpLeft className="w-3.5 h-3.5" />
-                      <span>{t.actionReply}</span>
-                    </button>
-
-                    {!isMine &&
-                      !msg.isBot &&
-                      !String(msg.senderId).startsWith('bot_') &&
-                      (chat.type === 'group' || chat.type === 'channel') &&
-                      onReplyPrivately && (
                         <button
                           type="button"
                           onClick={() => {
+                            setReplyTo(msg);
+                            setEditingMsg(null);
+                            setActiveQuote(null);
                             setMenuMsgId(null);
-                            onReplyPrivately(msg);
                           }}
-                          className="w-full text-start px-3 py-2 rounded-xl text-xs font-medium hover:bg-slate-100 dark:hover:bg-white/5 flex items-center gap-2.5 text-indigo-600 dark:text-sky-400"
+                          className="w-full text-start px-3 py-2 rounded-xl text-xs font-medium hover:bg-slate-100 dark:hover:bg-white/5 flex items-center gap-2.5"
                         >
-                          <MessageSquare className="w-3.5 h-3.5" />
-                          <span>{t.actionReplyPrivately}</span>
+                          <CornerUpLeft className="w-3.5 h-3.5" />
+                          <span>{t.actionReply}</span>
                         </button>
-                      )}
+
+                        {!isMine &&
+                          !msg.isBot &&
+                          !String(msg.senderId).startsWith('bot_') &&
+                          (chat.type === 'group' || chat.type === 'channel') &&
+                          onReplyPrivately && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setMenuMsgId(null);
+                                onReplyPrivately(msg);
+                              }}
+                              className="w-full text-start px-3 py-2 rounded-xl text-xs font-medium hover:bg-slate-100 dark:hover:bg-white/5 flex items-center gap-2.5 text-indigo-600 dark:text-sky-400"
+                            >
+                              <MessageSquare className="w-3.5 h-3.5" />
+                              <span>{t.actionReplyPrivately}</span>
+                            </button>
+                          )}
+
+                        <button
+                          type="button"
+                          onClick={() => enterSelectionWith(msg)}
+                          className="w-full text-start px-3 py-2 rounded-xl text-xs font-medium hover:bg-slate-100 dark:hover:bg-white/5 flex items-center gap-2.5"
+                        >
+                          <Forward className="w-3.5 h-3.5" />
+                          <span>{t.actionForward}</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => void handlePinToggle(msg.id)}
+                          className="w-full text-start px-3 py-2 rounded-xl text-xs font-medium hover:bg-slate-100 dark:hover:bg-white/5 flex items-center gap-2.5"
+                        >
+                          <Pin className="w-3.5 h-3.5" />
+                          <span>{msg.isPinned ? t.actionUnpin : t.actionPin}</span>
+                        </button>
+
+                        {isMine && msg.body && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingMsg(msg);
+                              setReplyTo(null);
+                              setBody(msg.body);
+                              setMenuMsgId(null);
+                            }}
+                            className="w-full text-start px-3 py-2 rounded-xl text-xs font-medium hover:bg-slate-100 dark:hover:bg-white/5 flex items-center gap-2.5"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                            <span>{t.actionEdit}</span>
+                          </button>
+                        )}
+                      </>
+                    )}
 
                     <button
                       type="button"
-                      onClick={() => openForwardDialog(msg)}
-                      className="w-full text-start px-3 py-2 rounded-xl text-xs font-medium hover:bg-slate-100 dark:hover:bg-white/5 flex items-center gap-2.5"
+                      onClick={() => openDeleteDialog([msg])}
+                      className="w-full text-start px-3 py-2 rounded-xl text-xs font-medium text-rose-500 hover:bg-rose-500/10 flex items-center gap-2.5"
                     >
-                      <Forward className="w-3.5 h-3.5" />
-                      <span>{t.actionForward}</span>
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>{t.actionDelete}</span>
                     </button>
-
-                    <button
-                      type="button"
-                      onClick={() => void handlePinToggle(msg.id)}
-                      className="w-full text-start px-3 py-2 rounded-xl text-xs font-medium hover:bg-slate-100 dark:hover:bg-white/5 flex items-center gap-2.5"
-                    >
-                      <Pin className="w-3.5 h-3.5" />
-                      <span>{msg.isPinned ? t.actionUnpin : t.actionPin}</span>
-                    </button>
-
-                    {isMine && msg.body && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setEditingMsg(msg);
-                          setReplyTo(null);
-                          setBody(msg.body);
-                          setMenuMsgId(null);
-                        }}
-                        className="w-full text-start px-3 py-2 rounded-xl text-xs font-medium hover:bg-slate-100 dark:hover:bg-white/5 flex items-center gap-2.5"
-                      >
-                        <Pencil className="w-3.5 h-3.5" />
-                        <span>{t.actionEdit}</span>
-                      </button>
-                    )}
-
-                    {(isMine || chat.myRole === 'owner' || chat.myRole === 'admin') && (
-                      <button
-                        type="button"
-                        onClick={() => void handleDeleteMsg(msg.id)}
-                        className="w-full text-start px-3 py-2 rounded-xl text-xs font-medium text-rose-500 hover:bg-rose-500/10 flex items-center gap-2.5"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                        <span>{t.actionDelete}</span>
-                      </button>
-                    )}
                   </div>
                 )}
+                </div>
               </div>
             </React.Fragment>
           );
@@ -1464,7 +1594,60 @@ export const ChatStage: React.FC<ChatStageProps> = ({
           </div>
         )}
 
-        {!canPost ? (
+        {selectionMode ? (
+          <div className="flex items-center justify-between gap-2 min-h-[48px]">
+            <div className="flex items-center gap-2 min-w-0">
+              <button
+                type="button"
+                onClick={exitSelectionMode}
+                aria-label={t.cancel}
+                className="min-h-[44px] px-3 rounded-xl flex items-center gap-1.5 text-xs font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/10 shrink-0 transition-colors"
+              >
+                <X className="w-4 h-4" />
+                <span className="hidden sm:inline">{t.cancel}</span>
+              </button>
+              <div className="min-w-0">
+                <p className="text-xs sm:text-sm font-semibold text-slate-800 dark:text-slate-100 truncate">
+                  <span className="font-mono-tabular font-bold text-indigo-600 dark:text-sky-400">
+                    {selectedMessages.length}
+                  </span>{' '}
+                  {t.selectedCountLabel}
+                </p>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate hidden sm:block">
+                  {t.selectMessagesHint}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                disabled={selectedMessages.length === 0}
+                onClick={() => openDeleteDialog(selectedMessages)}
+                className="min-h-[44px] px-3.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 disabled:opacity-40 text-rose-600 dark:text-rose-400 text-xs sm:text-sm font-semibold inline-flex items-center gap-1.5 transition-colors"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span>
+                  {t.actionDelete}
+                  {selectedMessages.length > 0 ? ` (${selectedMessages.length})` : ''}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                disabled={forwardableSelectedMessages.length === 0}
+                onClick={() => openForwardDialog(forwardableSelectedMessages)}
+                className="min-h-[44px] px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-xs sm:text-sm font-semibold inline-flex items-center gap-1.5 shadow-sm transition-colors"
+              >
+                <Forward className="w-4 h-4" />
+                <span>
+                  {t.forwardBtn}
+                  {forwardableSelectedMessages.length > 0 ? ` (${forwardableSelectedMessages.length})` : ''}
+                </span>
+              </button>
+            </div>
+          </div>
+        ) : !canPost ? (
           <p className="text-xs text-center text-slate-500 dark:text-slate-400 py-2">
             {isChannelReadOnly ? t.channelReadOnly : t.blockedNotice}
           </p>
@@ -1580,8 +1763,102 @@ export const ChatStage: React.FC<ChatStageProps> = ({
         )}
       </footer>
 
+      {/* Dual-Scope Delete Confirmation Modal (Delete for me vs Delete for everyone) */}
+      {deleteTargets && deleteTargets.length > 0 && (() => {
+        const canDeleteForEveryone = deleteTargets.every(
+          (m) => !m.deletedAt && (m.senderId === user.id || chat.myRole === 'owner' || chat.myRole === 'admin')
+        );
+        const firstMsg = deleteTargets[0];
+        const previewSnippet =
+          deleteTargets.length === 1
+            ? firstMsg.deletedAt
+              ? t.deletedMessage
+              : firstMsg.body?.trim() || firstMsg.attachments?.[0]?.originalName || 'Attachment'
+            : `${deleteTargets.length} ${t.messagesWord}`;
+
+        return (
+          <div
+            className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"
+            onClick={() => !deletingScope && setDeleteTargets(null)}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-sm rounded-3xl border border-slate-200 dark:border-white/10 bg-white dark:bg-[#121A2B] p-5 space-y-4 shadow-2xl"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-10 h-10 rounded-2xl bg-rose-500/15 text-rose-500 flex items-center justify-center shrink-0">
+                    <Trash2 className="w-5 h-5" />
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className="font-display text-base font-bold">
+                      {deleteTargets.length > 1 ? t.deleteMultipleTitle : t.deleteDialogTitle}
+                    </h3>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 truncate mt-0.5">
+                      {previewSnippet}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  disabled={Boolean(deletingScope)}
+                  onClick={() => setDeleteTargets(null)}
+                  aria-label={t.close}
+                  className="min-h-[40px] min-w-[40px] rounded-xl flex items-center justify-center hover:bg-slate-100 dark:hover:bg-white/10 shrink-0"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {deleteError && (
+                <p className="text-xs text-rose-500 bg-rose-500/10 border border-rose-500/20 rounded-xl px-3 py-2">
+                  {deleteError}
+                </p>
+              )}
+
+              <div className="space-y-2.5">
+                {canDeleteForEveryone && (
+                  <button
+                    type="button"
+                    disabled={Boolean(deletingScope)}
+                    onClick={() => void handleConfirmDelete('everyone')}
+                    className="w-full min-h-[48px] px-4 py-2.5 rounded-2xl bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white text-start transition-colors"
+                  >
+                    <p className="text-sm font-semibold">
+                      {deletingScope === 'everyone' ? t.deletingLabel : t.deleteForEveryone}
+                    </p>
+                    <p className="text-[11px] text-rose-100/90 mt-0.5">{t.deleteForEveryoneDesc}</p>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  disabled={Boolean(deletingScope)}
+                  onClick={() => void handleConfirmDelete('me')}
+                  className="w-full min-h-[48px] px-4 py-2.5 rounded-2xl bg-slate-100 hover:bg-slate-200 dark:bg-white/10 dark:hover:bg-white/15 disabled:opacity-50 text-slate-900 dark:text-slate-100 text-start transition-colors"
+                >
+                  <p className="text-sm font-semibold">
+                    {deletingScope === 'me' ? t.deletingLabel : t.deleteForMe}
+                  </p>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">{t.deleteForMeDesc}</p>
+                </button>
+
+                <button
+                  type="button"
+                  disabled={Boolean(deletingScope)}
+                  onClick={() => setDeleteTargets(null)}
+                  className="w-full min-h-[44px] px-4 rounded-2xl border border-slate-200 dark:border-white/10 hover:bg-slate-50 dark:hover:bg-white/5 text-sm font-semibold text-slate-600 dark:text-slate-300 transition-colors"
+                >
+                  {t.cancel}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Multi-Recipient Forward Contact Picker Dialog */}
-      {forwardingMsg && (() => {
+      {forwardingMsgs.length > 0 && (() => {
         const q = forwardSearch.trim().toLowerCase();
         const existingDmPeerIds = new Set(
           allChats
@@ -1601,11 +1878,13 @@ export const ChatStage: React.FC<ChatStageProps> = ({
           (u) => u.id !== user.id && !existingDmPeerIds.has(u.id)
         );
         const totalSelected = selectedChatIds.length + selectedUsers.length;
+        const firstForwardMsg = forwardingMsgs[0];
+        const uniqueSenders = Array.from(new Set(forwardingMsgs.map((m) => m.senderName))).slice(0, 3);
 
         return (
           <div
             className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"
-            onClick={() => !forwardingBusy && setForwardingMsg(null)}
+            onClick={() => !forwardingBusy && setForwardingMsgs([])}
           >
             <div
               onClick={(e) => e.stopPropagation()}
@@ -1616,12 +1895,14 @@ export const ChatStage: React.FC<ChatStageProps> = ({
                   <div className="w-9 h-9 rounded-xl bg-indigo-600/15 text-indigo-600 dark:text-sky-400 flex items-center justify-center shrink-0">
                     <Forward className="w-4 h-4" />
                   </div>
-                  <h3 className="font-display text-base font-bold truncate">{t.forwardTitle}</h3>
+                  <h3 className="font-display text-base font-bold truncate">
+                    {forwardingMsgs.length > 1 ? t.forwardMessagesTitle : t.forwardTitle}
+                  </h3>
                 </div>
                 <button
                   type="button"
                   disabled={forwardingBusy}
-                  onClick={() => setForwardingMsg(null)}
+                  onClick={() => setForwardingMsgs([])}
                   aria-label={t.close}
                   className="min-h-[40px] min-w-[40px] rounded-xl flex items-center justify-center hover:bg-slate-100 dark:hover:bg-white/10"
                 >
@@ -1629,16 +1910,32 @@ export const ChatStage: React.FC<ChatStageProps> = ({
                 </button>
               </div>
 
-              {/* Message Preview Card */}
+              {/* Message Preview Card (Single or Multi-Message Summary) */}
               <div className="px-3 py-2.5 rounded-2xl bg-slate-100 dark:bg-[#0B101B] border-s-2 border-indigo-500 text-xs shrink-0">
-                <p className="font-semibold text-indigo-600 dark:text-sky-400 truncate">
-                  {forwardingMsg.senderName}
-                </p>
-                <p className="text-slate-600 dark:text-slate-300 line-clamp-2 mt-0.5">
-                  {forwardingMsg.body?.trim() ||
-                    forwardingMsg.attachments?.[0]?.originalName ||
-                    'Attachment'}
-                </p>
+                {forwardingMsgs.length === 1 ? (
+                  <>
+                    <p className="font-semibold text-indigo-600 dark:text-sky-400 truncate">
+                      {firstForwardMsg.senderName}
+                    </p>
+                    <p className="text-slate-600 dark:text-slate-300 line-clamp-2 mt-0.5">
+                      {firstForwardMsg.body?.trim() ||
+                        firstForwardMsg.attachments?.[0]?.originalName ||
+                        'Attachment'}
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <p className="font-semibold text-indigo-600 dark:text-sky-400 truncate">
+                      {t.forwardingSummaryPrefix} {forwardingMsgs.length} {t.messagesWord} · {uniqueSenders.join(', ')}
+                    </p>
+                    <p className="text-slate-600 dark:text-slate-300 line-clamp-1 mt-0.5">
+                      {firstForwardMsg.body?.trim() ||
+                        firstForwardMsg.attachments?.[0]?.originalName ||
+                        'Attachment'}
+                      {forwardingMsgs.length > 1 ? ` (+${forwardingMsgs.length - 1})` : ''}
+                    </p>
+                  </>
+                )}
               </div>
 
               {/* Search Input */}

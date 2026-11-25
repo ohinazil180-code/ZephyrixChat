@@ -228,6 +228,14 @@ export function initDatabase(): void {
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS message_hidden_for (
+      message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      hidden_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (message_id, user_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_message_hidden_for_user ON message_hidden_for(user_id, message_id);
   `);
 
   // Safe additive checks for any pre-existing database files
