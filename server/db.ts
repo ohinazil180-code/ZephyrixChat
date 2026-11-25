@@ -1,6 +1,8 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
+import { hashPassword } from './security.ts';
 
 let db: DatabaseSync | null = null;
 let dbPathResolved = '';
@@ -262,6 +264,79 @@ export function initDatabase(): void {
     }
   } catch (err) {
     console.error('[sqlite] Error seeding default bot:', err);
+  }
+
+  try {
+    const adminEmail = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
+    const adminPassword = (process.env.ADMIN_PASSWORD || '').trim();
+    if (adminEmail && adminEmail.includes('@') && adminPassword.length >= 6) {
+      const existingAdmin = database
+        .prepare(`SELECT id, is_admin FROM users WHERE email = ? AND deleted_at IS NULL LIMIT 1`)
+        .get(adminEmail) as { id: string; is_admin: number } | undefined;
+
+      if (!existingAdmin) {
+        const rawBase = adminEmail.split('@')[0].replace(/[^a-z0-9_]/g, '').slice(0, 20) || 'superadmin';
+        const baseUsername = rawBase.length >= 3 ? rawBase : `${rawBase}_admin`;
+        const usernameTaken = database
+          .prepare(`SELECT id FROM users WHERE username = ? LIMIT 1`)
+          .get(baseUsername);
+        const username = usernameTaken
+          ? `${baseUsername.slice(0, 24)}_${crypto.randomBytes(3).toString('hex')}`
+          : baseUsername;
+
+        const adminId = crypto.randomUUID();
+        const savedChatId = crypto.randomUUID();
+        const aiChatId = crypto.randomUUID();
+        const passwordHash = hashPassword(adminPassword);
+        const now = new Date().toISOString();
+
+        database.exec('BEGIN IMMEDIATE');
+        try {
+          database
+            .prepare(
+              `INSERT INTO users (id, email, password_hash, username, display_name, bio, is_admin, verified_flag, developer_badge, preferred_locale, last_seen_at, created_at)
+               VALUES (?, ?, ?, ?, 'Super Admin', 'Zephyrix Super Administrator', 1, 1, 1, 'en', ?, ?)`
+            )
+            .run(adminId, adminEmail, passwordHash, username, now, now);
+
+          database
+            .prepare(
+              `INSERT INTO chats (id, type, title, description, zego_room_id, created_by, created_at)
+               VALUES (?, 'saved', 'Saved Messages', 'Personal cloud notes & bookmarks', ?, ?, ?)`
+            )
+            .run(savedChatId, `saved_${adminId.slice(0, 12)}`, adminId, now);
+          database
+            .prepare(
+              `INSERT INTO chat_members (chat_id, user_id, role, joined_at, last_read_at)
+               VALUES (?, ?, 'owner', ?, ?)`
+            )
+            .run(savedChatId, adminId, now, now);
+
+          database
+            .prepare(
+              `INSERT INTO chats (id, type, title, description, zego_room_id, created_by, created_at)
+               VALUES (?, 'ai', 'Zephyrix AI Assistant', 'Your intelligent multimodal companion powered by Gemini', ?, ?, ?)`
+            )
+            .run(aiChatId, `ai_${adminId.slice(0, 12)}`, adminId, now);
+          database
+            .prepare(
+              `INSERT INTO chat_members (chat_id, user_id, role, joined_at, last_read_at)
+               VALUES (?, ?, 'owner', ?, ?)`
+            )
+            .run(aiChatId, adminId, now, now);
+
+          database.exec('COMMIT');
+          console.info(`[sqlite] Seeded Super Admin account for ${adminEmail}`);
+        } catch (txErr) {
+          database.exec('ROLLBACK');
+          throw txErr;
+        }
+      } else if (!existingAdmin.is_admin) {
+        database.prepare(`UPDATE users SET is_admin = 1 WHERE id = ?`).run(existingAdmin.id);
+      }
+    }
+  } catch (err) {
+    console.error('[sqlite] Error seeding Super Admin from env:', err);
   }
 
   db = database;
