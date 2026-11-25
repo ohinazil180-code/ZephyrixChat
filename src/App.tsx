@@ -304,8 +304,8 @@ export default function App() {
   const peerIdsToSubscribe = useMemo(
     () =>
       chats
-        .map((c) => c.peer?.id)
-        .filter((id): id is string => Boolean(id)),
+        .filter((c) => c.type === 'direct' && c.peer && !c.peer.isBot)
+        .map((c) => c.peer!.id),
     [chats]
   );
 
@@ -660,7 +660,7 @@ export default function App() {
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ duration: reduceMotion ? 0.12 : 0.26, ease: [0.16, 1, 0.3, 1] }}
-          className="h-screen w-screen overflow-hidden flex bg-[#F5F7FB] dark:bg-[#0B101B] text-slate-900 dark:text-slate-100"
+          className="h-[100dvh] w-full overflow-hidden flex bg-[#F5F7FB] dark:bg-[#0B101B] text-slate-900 dark:text-slate-100"
         >
           <div className={`${mobileView === 'chat' ? 'hidden md:flex' : 'flex'} w-full md:w-auto h-full`}>
         <Sidebar

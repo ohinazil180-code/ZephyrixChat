@@ -390,7 +390,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
         <section className="hidden lg:flex lg:col-span-6 relative rounded-3xl overflow-hidden border border-slate-200 dark:border-white/12 bg-[#070B14] text-white min-h-[620px] flex-col justify-between p-10 shadow-2xl shadow-slate-950/20">
           {!heroImgFailed && (
             <img
-              src="/src/assets/images/zephyrix_auth_hero_1795359942502.jpg"
+              src={`${import.meta.env.BASE_URL}src/assets/images/zephyrix_auth_hero_1795359942502.jpg`}
               alt="Zephyrix Glass Architecture"
               referrerPolicy="no-referrer"
               onError={() => setHeroImgFailed(true)}
@@ -405,7 +405,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
           <div className="relative z-10 flex items-center gap-3">
             <div className="w-11 h-11 rounded-2xl overflow-hidden border border-white/20 bg-white/10 backdrop-blur-xl shadow-lg">
               <img
-                src="/src/assets/images/zephyrix_splash_emblem_1795359941658.jpg"
+                src={`${import.meta.env.BASE_URL}src/assets/images/zephyrix_splash_emblem_1795359941658.jpg`}
                 alt="Zephyrix Emblem"
                 referrerPolicy="no-referrer"
                 className="w-full h-full object-cover"

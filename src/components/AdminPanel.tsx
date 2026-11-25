@@ -304,18 +304,27 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   };
 
   const handleTestPromptSandbox = async () => {
+    const trimmedPrompt = testPrompt.trim();
+    if (!trimmedPrompt) {
+      setTestResponse('Enter a test prompt first.');
+      return;
+    }
     setTestingPrompt(true);
     setTestResponse(null);
     try {
-      const res = await apiFetch<{ reply: string }>('/api/v1/ai/chat', {
+      const res = await apiFetch<{ reply: string }>('/api/v1/admin/bots/test', {
         method: 'POST',
         body: JSON.stringify({
-          prompt: testPrompt,
+          prompt: trimmedPrompt,
           systemInstruction: botSystemInstruction,
-          model: botModel,
+          model: botModel.trim(),
+          provider: botProvider,
+          apiEndpoint: botEndpoint.trim(),
+          apiKey: botApiKey.trim() || undefined,
+          botId: editingBot?.id,
         }),
       });
-      setTestResponse(res.reply || 'Simulated response received successfully.');
+      setTestResponse(res.reply || 'Empty response received from model.');
     } catch (err) {
       setTestResponse(`Simulation error: ${err instanceof Error ? err.message : 'Unknown error'}`);
     } finally {

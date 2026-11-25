@@ -90,7 +90,7 @@ A GitHub Actions workflow is included to publish the frontend directly to **GitH
 
 ### Option B: Direct Full-Stack Render URL Linked on GitHub
 
-1. Deploy the entire full-stack app to [Render](https://dashboard.render.com) using `render.yaml` (`npm ci && npm run build`, `npm start`, health check `/api/v1/health`).
+1. Deploy the entire full-stack app to [Render](https://dashboard.render.com) using `render.yaml` (`npm install --include=dev && npm run build`, `npm start`, health check `/api/v1/health`).
 2. Copy your live Render URL (`https://<your-app-name>.onrender.com`) or your GitHub Pages URL (`https://<YOUR_GITHUB_USERNAME>.github.io/<YOUR_REPO_NAME>/`).
 3. On your GitHub repository page, click the gear icon next to **About**, paste your live URL into the **Website** field, and save.
 

@@ -11,7 +11,7 @@ import {
   publishToUsers,
   removeEventStream,
 } from './events.ts';
-import { isValidSafeUrl, sendApiError } from './security.ts';
+import { isSafeExternalHttpUrl, isValidSafeUrl, sendApiError } from './security.ts';
 import { generateToken04, getZegoCredentials } from './zego.ts';
 import { GoogleGenAI } from '@google/genai';
 
@@ -315,7 +315,7 @@ function getChatSummariesForUser(userId: string) {
            SELECT 1 FROM message_hidden_for mh
            WHERE mh.message_id = m.id AND mh.user_id = ?
          )
-       ORDER BY m.created_at DESC
+       ORDER BY m.created_at DESC, m.rowid DESC
        LIMIT 1`,
       [chatId, userId]
     );
@@ -1022,6 +1022,11 @@ export function registerApiRoutes(app: Express): void {
   app.post('/api/v1/chats/:id/read', requireAuth, (req: AuthRequest, res) => {
     const chatId = String(req.params.id);
     const userId = req.authUser!.id;
+    const membership = getMembership(chatId, userId);
+    if (!membership || membership.left_at) {
+      sendApiError(res, 403, 'FORBIDDEN', 'Access denied.');
+      return;
+    }
     const now = nowIso();
 
     dbRun(`UPDATE chat_members SET last_read_at = ? WHERE chat_id = ? AND user_id = ?`, [now, chatId, userId]);
@@ -1056,7 +1061,7 @@ export function registerApiRoutes(app: Express): void {
            SELECT 1 FROM message_hidden_for mh
            WHERE mh.message_id = m.id AND mh.user_id = ?
          )
-       ORDER BY m.created_at DESC
+       ORDER BY m.created_at DESC, m.rowid DESC
        LIMIT ?`,
       [chatId, req.authUser!.id, limit]
     );
@@ -1585,8 +1590,12 @@ export function registerApiRoutes(app: Express): void {
       `SELECT m.id, m.chat_id, m.sender_id, m.body, m.forwarded_from, m.deleted_at, u.display_name AS sender_name
        FROM messages m
        JOIN users u ON u.id = m.sender_id
-       WHERE m.id = ?`,
-      [msgId]
+       WHERE m.id = ?
+         AND NOT EXISTS (
+           SELECT 1 FROM message_hidden_for mh
+           WHERE mh.message_id = m.id AND mh.user_id = ?
+         )`,
+      [msgId, userId]
     );
     if (!sourceMsg || sourceMsg.deleted_at) {
       sendApiError(res, 404, 'MESSAGE_NOT_FOUND', 'Message not found.');
@@ -1672,11 +1681,11 @@ export function registerApiRoutes(app: Express): void {
 
     withTx(() => {
       for (const destChatId of resolvedChatIds) {
-        const destChat = dbGet<{ id: string; type: string }>(
-          `SELECT id, type FROM chats WHERE id = ? AND deleted_at IS NULL`,
+        const destChat = dbGet<{ id: string; type: string; is_banned: number }>(
+          `SELECT id, type, is_banned FROM chats WHERE id = ? AND deleted_at IS NULL`,
           [destChatId]
         );
-        if (!destChat) continue;
+        if (!destChat || destChat.is_banned) continue;
 
         const destMembership = getMembership(destChatId, userId);
         if (!destMembership || destMembership.left_at) continue;
@@ -2105,18 +2114,135 @@ export function registerApiRoutes(app: Express): void {
 
   app.post('/api/v1/calls/:callId/status', requireAuth, (req: AuthRequest, res) => {
     const callId = String(req.params.callId);
-    const status = String((req.body as { status?: string })?.status || 'ended');
+    const rawStatus = String((req.body as { status?: string })?.status || 'ended').trim();
+    const allowedStatuses = new Set(['active', 'ended', 'declined', 'missed']);
+    if (!allowedStatuses.has(rawStatus)) {
+      sendApiError(res, 400, 'INVALID_STATUS', 'Unsupported call status.');
+      return;
+    }
+
     const call = dbGet<{ id: string; chat_id: string }>(`SELECT id, chat_id FROM call_logs WHERE id = ?`, [callId]);
     if (!call) {
       sendApiError(res, 404, 'CALL_NOT_FOUND', 'Call record not found.');
       return;
     }
-    dbRun(`UPDATE call_logs SET status = ?, ended_at = ? WHERE id = ?`, [status, nowIso(), callId]);
-    if (status === 'declined' || status === 'ended' || status === 'missed') {
-      publishToChat(call.chat_id, { type: 'call:ended', callId, chatId: call.chat_id, reason: status });
+
+    const membership = getMembership(call.chat_id, req.authUser!.id);
+    if (!membership || membership.left_at) {
+      sendApiError(res, 403, 'FORBIDDEN', 'Access denied.');
+      return;
+    }
+
+    dbRun(`UPDATE call_logs SET status = ?, ended_at = ? WHERE id = ?`, [rawStatus, nowIso(), callId]);
+    if (rawStatus === 'declined' || rawStatus === 'ended' || rawStatus === 'missed') {
+      publishToChat(call.chat_id, { type: 'call:ended', callId, chatId: call.chat_id, reason: rawStatus });
     }
     res.json({ ok: true });
   });
+
+  async function generateBotCompletion(params: {
+    provider: string;
+    model: string;
+    prompt: string;
+    systemInstruction: string;
+    apiEndpoint?: string;
+    apiKey?: string;
+    attachmentUrl?: string;
+  }): Promise<{ reply?: string; error?: string }> {
+    const provider = (params.provider || 'gemini').trim().toLowerCase();
+    const model = (params.model || 'gemini-4-hydrogen').trim();
+    const systemInstruction =
+      params.systemInstruction ||
+      'You are Zephyrix AI Assistant, a friendly, intelligent, and multimodal companion built into Zephyrix. Provide helpful, accurate, and concise responses in English or Bengali depending on the user query.';
+
+    if (provider === 'gemini') {
+      const apiKey = process.env.GEMINI_API_KEY?.trim();
+      if (!apiKey) {
+        return {
+          error:
+            'Gemini AI is not configured on the server yet. Add GEMINI_API_KEY in your environment variables to enable live AI replies.',
+        };
+      }
+      try {
+        const ai = new GoogleGenAI({
+          apiKey,
+          httpOptions: {
+            headers: { 'User-Agent': 'aistudio-build' },
+          },
+        });
+        const resp = await ai.models.generateContent({
+          model,
+          contents: params.prompt,
+          config: {
+            systemInstruction,
+          },
+        });
+        if (!resp.text) {
+          return { error: `Model (${model}) returned an empty response.` };
+        }
+        return { reply: resp.text };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'unknown error';
+        console.error('[bot] Gemini generation error:', msg);
+        return { error: `Gemini AI error (${model}): ${msg}` };
+      }
+    }
+
+    const endpoint = String(params.apiEndpoint || '').trim();
+    if (!endpoint) {
+      return { error: 'Custom endpoint URL is required for non-Gemini bots.' };
+    }
+    if (!isSafeExternalHttpUrl(endpoint)) {
+      return { error: 'Custom endpoint URL must be a valid public HTTP or HTTPS URL.' };
+    }
+
+    const requestBody =
+      provider === 'openai'
+        ? {
+            model,
+            messages: [
+              { role: 'system', content: systemInstruction },
+              { role: 'user', content: params.prompt },
+            ],
+          }
+        : {
+            prompt: params.prompt,
+            systemInstruction,
+            model,
+            attachmentUrl: params.attachmentUrl,
+          };
+
+    try {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        redirect: 'error',
+        signal: AbortSignal.timeout(15000),
+        headers: {
+          'Content-Type': 'application/json',
+          ...(params.apiKey ? { Authorization: `Bearer ${params.apiKey}` } : {}),
+        },
+        body: JSON.stringify(requestBody),
+      });
+      if (!res.ok) {
+        return { error: `Custom endpoint returned HTTP ${res.status}.` };
+      }
+      const json = (await res.json().catch(() => null)) as Record<string, unknown> | null;
+      if (json && typeof json.reply === 'string') {
+        return { reply: json.reply };
+      }
+      if (json && typeof json.text === 'string') {
+        return { reply: json.text };
+      }
+      if (json && Array.isArray((json as any).choices) && (json as any).choices[0]?.message?.content) {
+        return { reply: String((json as any).choices[0].message.content) };
+      }
+      return { error: 'Endpoint responded without a recognized reply, text, or choices[0].message.content field.' };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'unknown error';
+      console.error('[bot] Custom endpoint error:', msg);
+      return { error: `Failed to reach custom AI endpoint: ${msg}` };
+    }
+  }
 
   async function triggerBotReply(
     chatId: string,
@@ -2148,74 +2274,22 @@ export function registerApiRoutes(app: Express): void {
       [botUserId, `${botHandle}@zephyrix.ai`, botHandle, botName, botIsVerified ? 1 : 0]
     );
 
-    let replyText = `Hello! I am ${botName}. I have received your message.`;
-    const provider = String(bot.provider || 'gemini');
-    const model = String(bot.model || 'gemini-4-hydrogen');
-    const systemPrompt = String(
-      bot.system_instruction ||
-        'You are Zephyrix AI Assistant, a friendly, intelligent, and multimodal companion built into Zephyrix. Provide helpful, accurate, and concise responses in English or Bengali depending on the user query.'
-    );
-
     let prompt = userPrompt;
     if (attachmentUrl) {
       prompt = `[User uploaded attachment: ${attachmentUrl}]\n${userPrompt || 'Please review this file or voice note.'}`;
     }
 
-    if (provider === 'gemini') {
-      try {
-        const apiKey = process.env.GEMINI_API_KEY;
-        if (apiKey) {
-          const ai = new GoogleGenAI({
-            apiKey,
-            httpOptions: {
-              headers: { 'User-Agent': 'aistudio-build' },
-            },
-          });
-          const resp = await ai.models.generateContent({
-            model,
-            contents: prompt,
-            config: {
-              systemInstruction: systemPrompt,
-            },
-          });
-          if (resp.text) {
-            replyText = resp.text;
-          }
-        }
-      } catch (err) {
-        console.error('[bot] Gemini generation error:', err instanceof Error ? err.message : 'unknown');
-        replyText = `I received your message, but encountered an error connecting to Gemini AI model (${model}). Please check your API key in Settings.`;
-      }
-    } else if (bot.api_endpoint) {
-      try {
-        const endpoint = String(bot.api_endpoint);
-        const res = await fetch(endpoint, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(bot.api_key ? { Authorization: `Bearer ${bot.api_key}` } : {}),
-          },
-          body: JSON.stringify({
-            prompt,
-            systemInstruction: systemPrompt,
-            model,
-            attachmentUrl,
-          }),
-        });
-        if (res.ok) {
-          const json = (await res.json().catch(() => null)) as Record<string, unknown> | null;
-          if (json && typeof json.reply === 'string') {
-            replyText = json.reply;
-          } else if (json && typeof json.text === 'string') {
-            replyText = json.text;
-          } else if (json && Array.isArray((json as any).choices) && (json as any).choices[0]?.message?.content) {
-            replyText = (json as any).choices[0].message.content;
-          }
-        }
-      } catch (err) {
-        console.error('[bot] Custom endpoint error:', err instanceof Error ? err.message : 'unknown');
-      }
-    }
+    const result = await generateBotCompletion({
+      provider: String(bot.provider || 'gemini'),
+      model: String(bot.model || 'gemini-4-hydrogen'),
+      prompt,
+      systemInstruction: String(bot.system_instruction || ''),
+      apiEndpoint: bot.api_endpoint ? String(bot.api_endpoint) : undefined,
+      apiKey: bot.api_key ? String(bot.api_key) : undefined,
+      attachmentUrl,
+    });
+
+    const replyText = result.reply || result.error || `Unable to generate a response right now.`;
 
     const aiMsgId = crypto.randomUUID();
     const aiNow = nowIso();
@@ -2505,6 +2579,56 @@ export function registerApiRoutes(app: Express): void {
     });
   });
 
+  // Admin: Prompt Studio Sandbox Test Endpoint
+  app.post('/api/v1/admin/bots/test', requireAuth, async (req: AuthRequest, res) => {
+    if (!req.authUser!.is_admin) {
+      sendApiError(res, 403, 'FORBIDDEN', 'Administrator privileges required.');
+      return;
+    }
+
+    const body = req.body as {
+      prompt?: string;
+      systemInstruction?: string;
+      model?: string;
+      provider?: string;
+      apiEndpoint?: string;
+      apiKey?: string;
+      botId?: string;
+    };
+
+    const prompt = String(body.prompt || '').trim();
+    if (!prompt) {
+      sendApiError(res, 400, 'INVALID_INPUT', 'A test prompt is required.');
+      return;
+    }
+
+    let resolvedApiKey = body.apiKey ? String(body.apiKey).trim() : '';
+    if (!resolvedApiKey && body.botId) {
+      const existingBot = dbGet<{ api_key: string | null }>(`SELECT api_key FROM bots WHERE id = ?`, [
+        String(body.botId),
+      ]);
+      if (existingBot?.api_key) {
+        resolvedApiKey = existingBot.api_key;
+      }
+    }
+
+    const result = await generateBotCompletion({
+      provider: String(body.provider || 'gemini'),
+      model: String(body.model || 'gemini-4-hydrogen'),
+      prompt,
+      systemInstruction: String(body.systemInstruction || ''),
+      apiEndpoint: body.apiEndpoint ? String(body.apiEndpoint).trim() : undefined,
+      apiKey: resolvedApiKey || undefined,
+    });
+
+    if (result.error) {
+      sendApiError(res, 400, 'BOT_TEST_FAILED', result.error);
+      return;
+    }
+
+    res.json({ reply: result.reply || '' });
+  });
+
   // Admin: Bot Manager - Register new AI Bot
   app.post('/api/v1/admin/bots', requireAuth, (req: AuthRequest, res) => {
     if (!req.authUser!.is_admin) {
@@ -2529,6 +2653,12 @@ export function registerApiRoutes(app: Express): void {
     const handle = String(body.handle || '').trim().replace(/^@/, '').toLowerCase();
     if (!name || !handle) {
       sendApiError(res, 400, 'INVALID_INPUT', 'Bot name and handle are required.');
+      return;
+    }
+
+    const endpoint = String(body.api_endpoint || '').trim();
+    if (endpoint && !isSafeExternalHttpUrl(endpoint)) {
+      sendApiError(res, 400, 'INVALID_ENDPOINT', 'API endpoint must be a valid public HTTP or HTTPS URL.');
       return;
     }
 
@@ -2636,8 +2766,13 @@ export function registerApiRoutes(app: Express): void {
       params.push(body.model);
     }
     if (typeof body.api_endpoint === 'string') {
+      const trimmedEndpoint = body.api_endpoint.trim();
+      if (trimmedEndpoint && !isSafeExternalHttpUrl(trimmedEndpoint)) {
+        sendApiError(res, 400, 'INVALID_ENDPOINT', 'API endpoint must be a valid public HTTP or HTTPS URL.');
+        return;
+      }
       updates.push('api_endpoint = ?');
-      params.push(body.api_endpoint.trim());
+      params.push(trimmedEndpoint);
     }
     if (typeof body.api_key === 'string') {
       updates.push('api_key = ?');
