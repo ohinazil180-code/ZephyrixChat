@@ -104,6 +104,14 @@ export function extractToken(req: Request): string | null {
   return null;
 }
 
+function isUniqueConstraintError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const candidate = error as { code?: unknown; message?: unknown };
+  const code = String(candidate.code || '');
+  const message = String(candidate.message || '');
+  return code === '23505' || code === 'SQLITE_CONSTRAINT_UNIQUE' || /UNIQUE constraint failed/i.test(message);
+}
+
 function mapUserRow(row: Record<string, unknown>): AuthenticatedUser {
   return {
     id: String(row.id),
@@ -323,11 +331,6 @@ export function registerAuthRoutes(app: Express): void {
           return;
         }
 
-        const userCountRow = await dbGet<{ cnt: number | string }>(
-          `SELECT COUNT(*) AS cnt FROM users WHERE deleted_at IS NULL`
-        );
-        const isFirstUser = Number(userCountRow?.cnt || 0) === 0;
-        const isAdmin = isFirstUser ? 1 : 0;
 
         const userId = crypto.randomUUID();
         const passwordHash = hashPassword(password);
@@ -337,8 +340,8 @@ export function registerAuthRoutes(app: Express): void {
 
         await withTx(async () => {
           await dbRun(
-            `INSERT INTO users (id, email, password_hash, username, display_name, phone, country, bio, avatar_url, is_admin, preferred_locale, last_seen_at, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO users (id, email, password_hash, username, display_name, phone, country, bio, avatar_url, preferred_locale, last_seen_at, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               userId,
               email,
@@ -349,7 +352,6 @@ export function registerAuthRoutes(app: Express): void {
               country,
               bio,
               avatarUrl || null,
-              isAdmin,
               preferredLocale,
               now,
               now,
@@ -387,8 +389,12 @@ export function registerAuthRoutes(app: Express): void {
           user: userRow ? mapUserRow(userRow) : null,
         });
       } catch (err) {
+        if (isUniqueConstraintError(err)) {
+          sendApiError(res, 409, 'ACCOUNT_ALREADY_EXISTS', 'That email or username is already registered.');
+          return;
+        }
         console.error('[auth] Signup failed:', err instanceof Error ? err.message : 'unknown');
-        sendApiError(res, 500, 'SIGNUP_FAILED', 'Unable to create account.');
+        sendApiError(res, 500, 'SIGNUP_FAILED', 'Unable to create account. Please try again.');
       }
     })
   );

@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
 import { Pool, type PoolClient } from 'pg';
-import { hashPassword } from './security.ts';
+import { hashPassword, verifyPassword } from './security.ts';
 
 export type DatabaseEngine = 'postgres' | 'sqlite';
 export type SqlParam = SQLInputValue | undefined;
@@ -160,8 +160,8 @@ async function seedSuperAdminFromEnv(): Promise<void> {
       return;
     }
 
-    const existingAdmin = await dbGet<{ id: string; is_admin: number }>(
-      `SELECT id, is_admin FROM users WHERE email = ? AND deleted_at IS NULL LIMIT 1`,
+    const existingAdmin = await dbGet<{ id: string; is_admin: number; password_hash: string }>(
+      `SELECT id, is_admin, password_hash FROM users WHERE email = ? AND deleted_at IS NULL LIMIT 1`,
       [adminEmail]
     );
 
@@ -212,8 +212,25 @@ async function seedSuperAdminFromEnv(): Promise<void> {
       });
 
       console.info(`[${activeEngine}] Seeded Super Admin account for ${adminEmail}`);
-    } else if (!existingAdmin.is_admin) {
-      await dbRun(`UPDATE users SET is_admin = 1 WHERE id = ?`, [existingAdmin.id]);
+    } else {
+      const passwordMatches = verifyPassword(adminPassword, existingAdmin.password_hash);
+      if (!existingAdmin.is_admin || !passwordMatches) {
+        await withTx(async () => {
+          if (!passwordMatches) {
+            await dbRun(`UPDATE users SET password_hash = ?, is_admin = 1 WHERE id = ?`, [
+              hashPassword(adminPassword),
+              existingAdmin.id,
+            ]);
+            await dbRun(`UPDATE sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL`, [
+              nowIso(),
+              existingAdmin.id,
+            ]);
+          } else {
+            await dbRun(`UPDATE users SET is_admin = 1 WHERE id = ?`, [existingAdmin.id]);
+          }
+        });
+        console.info(`[${activeEngine}] Reconciled configured Super Admin account.`);
+      }
     }
   } catch (err) {
     console.error(`[${activeEngine}] Error seeding Super Admin from env:`, err);
