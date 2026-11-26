@@ -19,10 +19,17 @@ services:
         sync: false
       - key: ZEGO_SERVER_SECRET
         sync: false
+      - key: DATABASE_URL
+        sync: false
       - key: FRONTEND_URL
         sync: false
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      # Optional: When DATABASE_URL is unset, Zephyrix falls back to local SQLite.
       # For paid plans with a Render Persistent Disk mounted at /var/data,
-      # uncomment DATA_DIR and disk below so SQLite & uploads persist across deploys:
+      # uncomment DATA_DIR and disk below so uploads (and SQLite if used) persist:
       # - key: DATA_DIR
       #   value: /var/data
     # disk:

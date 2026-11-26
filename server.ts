@@ -29,7 +29,7 @@ async function startServer() {
   app.use(express.json({ limit: '4mb' }));
   app.use(verifyCsrfForMutations);
 
-  initDatabase();
+  await initDatabase();
 
   registerAuthRoutes(app);
   registerMediaRoutes(app);
@@ -54,37 +54,55 @@ async function startServer() {
       return;
     }
 
-    const auth = authenticateWsRequest(request);
-    if (!auth) {
-      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+    const onSocketError = () => {
       socket.destroy();
-      return;
-    }
+    };
+    socket.on('error', onSocketError);
 
-    wss.handleUpgrade(request, socket, head, (ws) => {
-      addWebSocketClient(auth.userId, ws);
+    void (async () => {
       try {
-        ws.send(JSON.stringify({ type: 'ws:connected', userId: auth.userId }));
-      } catch {
-        // ignore
-      }
+        const auth = await authenticateWsRequest(request);
+        socket.removeListener('error', onSocketError);
+        if (socket.destroyed) return;
 
-      const heartbeat = setInterval(() => {
-        if (ws.readyState === ws.OPEN) {
-          ws.ping();
+        if (!auth) {
+          socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+          socket.destroy();
+          return;
         }
-      }, 25000);
 
-      ws.on('close', () => {
-        clearInterval(heartbeat);
-        removeWebSocketClient(auth.userId, ws);
-      });
+        wss.handleUpgrade(request, socket, head, (ws) => {
+          addWebSocketClient(auth.userId, ws);
+          try {
+            ws.send(JSON.stringify({ type: 'ws:connected', userId: auth.userId }));
+          } catch {
+            // ignore
+          }
 
-      ws.on('error', () => {
-        clearInterval(heartbeat);
-        removeWebSocketClient(auth.userId, ws);
-      });
-    });
+          const heartbeat = setInterval(() => {
+            if (ws.readyState === ws.OPEN) {
+              ws.ping();
+            }
+          }, 25000);
+
+          ws.on('close', () => {
+            clearInterval(heartbeat);
+            removeWebSocketClient(auth.userId, ws);
+          });
+
+          ws.on('error', () => {
+            clearInterval(heartbeat);
+            removeWebSocketClient(auth.userId, ws);
+          });
+        });
+      } catch {
+        socket.removeListener('error', onSocketError);
+        if (!socket.destroyed) {
+          socket.write('HTTP/1.1 500 Internal Server Error\r\n\r\n');
+          socket.destroy();
+        }
+      }
+    })();
   });
 
   app.get('/healthz', (_req, res) => {
@@ -132,12 +150,10 @@ async function startServer() {
     console.info(`[zephyrix] Received ${signal}, shutting down gracefully...`);
     wss.close();
     server.close(() => {
-      closeDatabase();
-      process.exit(0);
+      void closeDatabase().finally(() => process.exit(0));
     });
     setTimeout(() => {
-      closeDatabase();
-      process.exit(0);
+      void closeDatabase().finally(() => process.exit(0));
     }, 5000).unref();
   };
 

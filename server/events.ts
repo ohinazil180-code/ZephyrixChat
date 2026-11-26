@@ -117,8 +117,8 @@ export function publishToUsers(userIds: string[], event: LiveEventPayload): void
   }
 }
 
-export function publishToChat(chatId: string, event: LiveEventPayload, excludeUserId?: string): void {
-  const rows = dbAll<{ user_id: string }>(
+export async function publishToChat(chatId: string, event: LiveEventPayload, excludeUserId?: string): Promise<void> {
+  const rows = await dbAll<{ user_id: string }>(
     `SELECT user_id FROM chat_members WHERE chat_id = ? AND left_at IS NULL`,
     [chatId]
   );
@@ -126,15 +126,15 @@ export function publishToChat(chatId: string, event: LiveEventPayload, excludeUs
   publishToUsers(targets, event);
 }
 
-export function publishReactionToChat(
+export async function publishReactionToChat(
   chatId: string,
   messageId: string,
   actorUserId: string,
   emoji: string,
   action: 'added' | 'removed',
   groupedReactions: Array<{ emoji: string; count: number; userIds: Set<string>; users: ReactionUserSummary[] }>
-): void {
-  const rows = dbAll<{ user_id: string }>(
+): Promise<void> {
+  const rows = await dbAll<{ user_id: string }>(
     `SELECT user_id FROM chat_members WHERE chat_id = ? AND left_at IS NULL`,
     [chatId]
   );

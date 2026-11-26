@@ -1,6 +1,6 @@
 # Zephyrix
 
-A full-stack real-time messaging and calling web application built with React, Vite, Tailwind CSS, Express, WebSockets/SSE, and SQLite (`node:sqlite`).
+A full-stack real-time messaging and calling web application built with React, Vite, Tailwind CSS, Express, WebSockets/SSE, PostgreSQL (`pg`), and SQLite (`node:sqlite`).
 
 ## Features
 
@@ -18,7 +18,7 @@ A full-stack real-time messaging and calling web application built with React, V
 ## Tech Stack
 
 - **Frontend**: React 19, TypeScript, Vite, Tailwind CSS v4, Lucide Icons, Motion
-- **Backend**: Node.js (`>=22.18.0`), Express, `ws` (WebSockets) + Server-Sent Events (SSE), `node:sqlite`
+- **Backend**: Node.js (`>=22.18.0`), Express, `ws` (WebSockets) + Server-Sent Events (SSE), PostgreSQL (`pg` via `DATABASE_URL`) with automatic `node:sqlite` fallback
 - **Deployment**: Included `render.yaml` Blueprint for Render Web Service hosting
 
 ## Local Development
@@ -36,7 +36,8 @@ A full-stack real-time messaging and calling web application built with React, V
    Key variables:
    - `PORT=3000`
    - `SESSION_PEPPER` (32+ random characters in production)
-   - `DATA_DIR=./data` (SQLite database and local uploads directory)
+   - `DATABASE_URL` (optional PostgreSQL connection string — recommended for Render Free tier via Neon, Supabase, or Render Postgres so accounts/chats persist across restarts; omit locally to use SQLite automatically)
+   - `DATA_DIR=./data` (SQLite database fallback and local uploads directory)
    - `GEMINI_API_KEY` (optional, for AI assistant replies)
    - `ZEGO_APP_ID` and `ZEGO_SERVER_SECRET` (optional, for live ZEGOCLOUD audio/video calls)
 

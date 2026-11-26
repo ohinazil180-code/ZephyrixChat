@@ -173,6 +173,19 @@ export function sendApiError(res: Response, status: number, code: string, messag
   });
 }
 
+export function asyncRoute<TReq extends Request = Request>(
+  handler: (req: TReq, res: Response, next: NextFunction) => unknown
+) {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    Promise.resolve(handler(req as TReq, res, next)).catch((err) => {
+      console.error('[api] Unhandled route error:', err instanceof Error ? err.message : 'unknown');
+      if (!res.headersSent) {
+        sendApiError(res, 500, 'INTERNAL_ERROR', 'Internal server error.');
+      }
+    });
+  };
+}
+
 export function isValidSafeUrl(raw: string): boolean {
   if (raw.startsWith('/api/v1/media/')) return true;
   try {
