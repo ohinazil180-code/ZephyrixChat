@@ -105,21 +105,28 @@ export function convertSqlToPostgres(sql: string): string {
   return out;
 }
 
-function buildPostgresSslConfig(connectionString: string): false | { rejectUnauthorized: boolean } {
+function normalizePostgresConnection(connectionString: string): {
+  connectionString: string;
+  ssl: false | { rejectUnauthorized: boolean };
+} {
   try {
     const parsed = new URL(connectionString);
     const sslMode = (parsed.searchParams.get('sslmode') || '').toLowerCase();
-    if (sslMode === 'disable') {
-      return false;
-    }
     const host = parsed.hostname.toLowerCase();
     const isLocal = host === 'localhost' || host === '127.0.0.1' || host === '::1';
-    if (isLocal && !sslMode) {
-      return false;
+
+    let ssl: false | { rejectUnauthorized: boolean };
+    if (sslMode === 'disable' || (isLocal && !sslMode)) {
+      ssl = false;
+    } else {
+      ssl = { rejectUnauthorized: false };
     }
-    return { rejectUnauthorized: false };
+
+    parsed.searchParams.delete('sslmode');
+    parsed.searchParams.delete('uselibpqcompat');
+    return { connectionString: parsed.toString(), ssl };
   } catch {
-    return { rejectUnauthorized: false };
+    return { connectionString, ssl: { rejectUnauthorized: false } };
   }
 }
 
@@ -216,9 +223,10 @@ async function seedSuperAdminFromEnv(): Promise<void> {
 async function initPostgres(databaseUrl: string): Promise<void> {
   if (pgPool) return;
 
+  const pgConfig = normalizePostgresConnection(databaseUrl);
   const pool = new Pool({
-    connectionString: databaseUrl,
-    ssl: buildPostgresSslConfig(databaseUrl),
+    connectionString: pgConfig.connectionString,
+    ssl: pgConfig.ssl,
     max: 10,
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 15_000,
