@@ -1,6 +1,7 @@
 import type { MessageAttachment, OfflineDraftItem, SystemConfig } from '../types/zephyrix';
 
-const API_BASE = ((import.meta.env.VITE_API_URL as string | undefined) || '').trim().replace(/\/$/, '');
+const API_ORIGIN = ((import.meta.env.VITE_API_URL as string | undefined) || '').trim().replace(/\/$/, '');
+const API_BASE = import.meta.env.PROD ? '' : API_ORIGIN;
 
 export function apiUrl(path: string): string {
   if (path.startsWith('http://') || path.startsWith('https://')) return path;
@@ -18,7 +19,7 @@ export function getInMemoryToken(): string | null {
 }
 
 export function wsUrl(path: string): string {
-  const base = API_BASE || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000');
+  const base = API_ORIGIN || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000');
   const parsed = new URL(path, base);
   parsed.protocol = parsed.protocol === 'https:' ? 'wss:' : 'ws:';
   if (inMemoryToken && !parsed.searchParams.has('token')) {
