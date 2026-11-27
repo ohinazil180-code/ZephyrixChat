@@ -22,7 +22,9 @@ services:
       - key: DATABASE_URL
         sync: false
       - key: FRONTEND_URL
-        sync: false
+        value: https://zephyrixchat.vercel.app
+      - key: CORS_ORIGIN
+        value: https://zephyrixchat.vercel.app
       - key: ADMIN_EMAIL
         sync: false
       - key: ADMIN_PASSWORD
